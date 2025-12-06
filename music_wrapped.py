@@ -6,7 +6,7 @@ Generate Spotify Wrapped-style summaries from Spotify or Apple Music data.
 
 Usage:
     # Apple Music (from data export)
-    python music_wrapped.py apple /path/to/Apple\ Music\ Activity --name "John" --year 2024
+    python music_wrapped.py apple "/path/to/Apple Music Activity" --name "John" --year 2024
     
     # Spotify (using API)
     python music_wrapped.py spotify username --name "Jane"
