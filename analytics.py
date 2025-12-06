@@ -39,6 +39,26 @@ class ListeningSummary:
     # Monthly breakdown
     monthly_stats: List[Dict] = field(default_factory=list)
     
+    # Extended stats (inspired by jcblsn/apple-music-wrapped)
+    hourly_stats: List[Dict] = field(default_factory=list)
+    daily_stats: List[Dict] = field(default_factory=list)
+    
+    # Listening streaks
+    longest_streak: int = 0
+    current_streak: int = 0
+    total_listening_days: int = 0
+    
+    # Diversity metrics
+    diversity_score: float = 0.0
+    songs_per_artist: float = 0.0
+    replay_ratio: float = 0.0
+    top_10_concentration: float = 0.0
+    
+    # Peak listening
+    peak_hour: Optional[int] = None
+    peak_day: Optional[str] = None
+    peak_month: Optional[str] = None
+    
     # Listener profile
     listener_name: Optional[str] = None
     year: Optional[int] = None
@@ -62,6 +82,24 @@ class ListeningSummary:
             'top_genres': self.top_genres,
             'top_albums': self.top_albums,
             'monthly_stats': self.monthly_stats,
+            'hourly_stats': self.hourly_stats,
+            'daily_stats': self.daily_stats,
+            'streaks': {
+                'longest': self.longest_streak,
+                'current': self.current_streak,
+                'total_days': self.total_listening_days
+            },
+            'diversity': {
+                'score': self.diversity_score,
+                'songs_per_artist': self.songs_per_artist,
+                'replay_ratio': self.replay_ratio,
+                'top_10_concentration': self.top_10_concentration
+            },
+            'peak': {
+                'hour': self.peak_hour,
+                'day': self.peak_day,
+                'month': self.peak_month
+            },
             'listener_name': self.listener_name,
             'year': self.year
         }
@@ -141,6 +179,7 @@ class UnifiedAnalytics:
                            listener_name: Optional[str] = None) -> ListeningSummary:
         """
         Analyze Apple Music data and return unified summary.
+        Extended with statistics inspired by jcblsn/apple-music-wrapped.
         
         Args:
             year: Optional year to filter by
@@ -181,6 +220,34 @@ class UnifiedAnalytics:
         monthly_df = self._apple_parser.get_listening_by_month(year)
         summary.monthly_stats = monthly_df.to_dict('records') if not monthly_df.empty else []
         
+        # Extended stats (inspired by jcblsn/apple-music-wrapped)
+        # Hourly listening patterns
+        hourly_df = self._apple_parser.get_listening_by_hour(year)
+        summary.hourly_stats = hourly_df.to_dict('records') if not hourly_df.empty else []
+        
+        # Daily listening patterns
+        daily_df = self._apple_parser.get_listening_by_day_of_week(year)
+        summary.daily_stats = daily_df.to_dict('records') if not daily_df.empty else []
+        
+        # Listening streaks
+        streaks = self._apple_parser.get_listening_streaks(year)
+        summary.longest_streak = streaks['longest_streak']
+        summary.current_streak = streaks['current_streak']
+        summary.total_listening_days = streaks['total_listening_days']
+        
+        # Diversity metrics
+        diversity = self._apple_parser.get_diversity_score(year)
+        summary.diversity_score = diversity['diversity_score']
+        summary.songs_per_artist = diversity['songs_per_artist']
+        summary.replay_ratio = diversity['replay_ratio']
+        summary.top_10_concentration = diversity['top_10_concentration']
+        
+        # Peak listening times
+        peak = self._apple_parser.get_peak_listening(year)
+        summary.peak_hour = peak['peak_hour']
+        summary.peak_day = peak['peak_day']
+        summary.peak_month = peak['peak_month']
+        
         return summary
     
     def _normalize_songs(self, df: pd.DataFrame) -> List[Dict]:
@@ -190,10 +257,24 @@ class UnifiedAnalytics:
         
         songs = []
         for _, row in df.iterrows():
+            # Handle NaN values properly
+            name = row.get('Song Name', row.get('name', 'Unknown'))
+            album = row.get('Album Name', row.get('album', ''))
+            artist = row.get('Artist Name', row.get('artist', ''))
+            
+            # Convert NaN to empty string
+            if pd.isna(album):
+                album = ''
+            if pd.isna(artist):
+                artist = ''
+            if pd.isna(name):
+                name = 'Unknown'
+            
             song = {
-                'name': row.get('Song Name', row.get('name', 'Unknown')),
+                'name': str(name),
                 'play_count': int(row.get('play_count', 0)),
-                'album': row.get('Album Name', row.get('album', '')),
+                'album': str(album),
+                'artist': str(artist),
             }
             songs.append(song)
         return songs
@@ -263,6 +344,48 @@ class UnifiedAnalytics:
             print(f"\n🎸 TOP GENRES")
             for i, genre in enumerate(summary.top_genres[:5], 1):
                 print(f"   {i}. {genre['name']}")
+        
+        # Extended insights (inspired by jcblsn/apple-music-wrapped)
+        print(f"\n📈 LISTENING INSIGHTS")
+        
+        # Peak times
+        if summary.peak_hour is not None:
+            hour_str = f"{summary.peak_hour:02d}:00"
+            if summary.peak_hour < 6:
+                time_desc = "🌙 Night owl!"
+            elif summary.peak_hour < 12:
+                time_desc = "☀️ Morning listener!"
+            elif summary.peak_hour < 18:
+                time_desc = "🌤️ Afternoon vibes!"
+            else:
+                time_desc = "🌆 Evening grooves!"
+            print(f"   Peak listening hour: {hour_str} {time_desc}")
+        
+        if summary.peak_day:
+            print(f"   Peak listening day: {summary.peak_day}")
+        
+        if summary.peak_month:
+            print(f"   Peak listening month: {summary.peak_month}")
+        
+        # Streaks
+        if summary.longest_streak > 0:
+            print(f"\n🔥 STREAKS")
+            print(f"   Longest streak: {summary.longest_streak} days in a row!")
+            print(f"   Total listening days: {summary.total_listening_days} days")
+        
+        # Diversity
+        if summary.diversity_score > 0:
+            print(f"\n🎲 MUSIC DIVERSITY")
+            print(f"   Diversity score: {summary.diversity_score:.0f}/100")
+            if summary.diversity_score >= 70:
+                print(f"   You're a musical explorer! 🌍")
+            elif summary.diversity_score >= 40:
+                print(f"   You have eclectic taste! 🎭")
+            else:
+                print(f"   You know what you like! 💎")
+            print(f"   Avg songs per artist: {summary.songs_per_artist:.1f}")
+            print(f"   Replay ratio: {summary.replay_ratio:.1f}x")
+            print(f"   Top 10 songs = {summary.top_10_concentration:.0f}% of plays")
         
         print("\n" + "="*70)
         

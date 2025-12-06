@@ -205,6 +205,40 @@ class ArtworkFetcher:
         
         return results
     
+    def get_artist_for_album(self, album_name: str) -> Optional[str]:
+        """
+        Look up the artist name for an album using MusicBrainz.
+        
+        Args:
+            album_name: Name of the album
+            
+        Returns:
+            Artist name or None if not found
+        """
+        if not album_name:
+            return None
+            
+        self._rate_limit()
+        
+        try:
+            # Search for the album
+            result = musicbrainzngs.search_releases(release=album_name, limit=1)
+            
+            if result.get('release-list'):
+                release = result['release-list'][0]
+                # Get artist credit
+                if release.get('artist-credit'):
+                    artist_credit = release['artist-credit']
+                    if isinstance(artist_credit, list) and len(artist_credit) > 0:
+                        artist = artist_credit[0]
+                        if isinstance(artist, dict):
+                            return artist.get('name', artist.get('artist', {}).get('name'))
+                        return str(artist)
+        except Exception as e:
+            pass  # Silently fail
+        
+        return None
+    
     def create_placeholder_image(self, text: str, size: tuple = (250, 250), 
                                   bg_color: tuple = (30, 30, 30),
                                   text_color: tuple = (255, 255, 255)) -> str:

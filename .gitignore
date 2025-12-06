@@ -48,6 +48,23 @@ file_name
 # Spotify keys (keep secret!)
 keys.py
 
+# Streamlit secrets (NEVER commit!)
+.streamlit/secrets.toml
+
 # Generated images (gitignore the root ones, keep templates)
 wrapped_*.jpg
 Spotify-Wrapped*.jpg
+
+# Music files (personal content, never commit!)
+music/
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.aac
+!music/README.md
+
+# Video output
+*.mp4
+*.mov
+*.avi

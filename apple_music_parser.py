@@ -243,6 +243,11 @@ class AppleMusicParser:
             albums = df.groupby('Song Name')['Album Name'].first()
             song_stats = song_stats.join(albums)
         
+        # Get artist name if available (Container Artist Name)
+        if 'Container Artist Name' in df.columns:
+            artists = df.groupby('Song Name')['Container Artist Name'].first()
+            song_stats = song_stats.join(artists.rename('Artist Name'))
+        
         # Sort by play count, then by duration
         song_stats = song_stats.sort_values(
             ['play_count', 'total_duration_ms'], 
@@ -465,6 +470,236 @@ class AppleMusicParser:
         
         return monthly
     
+    def get_listening_by_hour(self, year: Optional[int] = None) -> pd.DataFrame:
+        """
+        Get listening activity grouped by hour of day.
+        Inspired by jcblsn/apple-music-wrapped.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            DataFrame with hourly listening stats
+        """
+        if self.play_activity is None:
+            return pd.DataFrame()
+        
+        df = self.play_activity.copy()
+        
+        if 'Event Start Timestamp' not in df.columns:
+            return pd.DataFrame()
+        
+        df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        df = df.dropna(subset=['Event Start Timestamp'])
+        
+        if year:
+            df = df[df['Event Start Timestamp'].dt.year == year]
+        
+        if 'Event Type' in df.columns:
+            df = df[df['Event Type'] == 'PLAY_END']
+        
+        df['hour'] = df['Event Start Timestamp'].dt.hour
+        
+        hourly = df.groupby('hour').agg({
+            'Song Name': 'count',
+            'Play Duration Milliseconds': 'sum'
+        }).rename(columns={
+            'Song Name': 'play_count',
+            'Play Duration Milliseconds': 'total_duration_ms'
+        })
+        
+        # Fill missing hours with 0
+        hourly = hourly.reindex(range(24), fill_value=0)
+        hourly['total_duration_hours'] = (hourly['total_duration_ms'] / (1000 * 60 * 60)).round(2)
+        hourly = hourly.reset_index().rename(columns={'index': 'hour'})
+        
+        return hourly
+    
+    def get_listening_by_day_of_week(self, year: Optional[int] = None) -> pd.DataFrame:
+        """
+        Get listening activity grouped by day of week.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            DataFrame with daily listening stats (0=Monday, 6=Sunday)
+        """
+        if self.play_activity is None:
+            return pd.DataFrame()
+        
+        df = self.play_activity.copy()
+        
+        if 'Event Start Timestamp' not in df.columns:
+            return pd.DataFrame()
+        
+        df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        df = df.dropna(subset=['Event Start Timestamp'])
+        
+        if year:
+            df = df[df['Event Start Timestamp'].dt.year == year]
+        
+        if 'Event Type' in df.columns:
+            df = df[df['Event Type'] == 'PLAY_END']
+        
+        df['day_of_week'] = df['Event Start Timestamp'].dt.dayofweek
+        
+        daily = df.groupby('day_of_week').agg({
+            'Song Name': 'count',
+            'Play Duration Milliseconds': 'sum'
+        }).rename(columns={
+            'Song Name': 'play_count',
+            'Play Duration Milliseconds': 'total_duration_ms'
+        })
+        
+        daily = daily.reindex(range(7), fill_value=0)
+        daily['total_duration_hours'] = (daily['total_duration_ms'] / (1000 * 60 * 60)).round(2)
+        daily = daily.reset_index().rename(columns={'index': 'day_of_week'})
+        
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        daily['day_name'] = daily['day_of_week'].apply(lambda x: day_names[x])
+        
+        return daily
+    
+    def get_listening_streaks(self, year: Optional[int] = None) -> Dict:
+        """
+        Calculate listening streak statistics.
+        Inspired by jcblsn/apple-music-wrapped.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            Dictionary with streak statistics
+        """
+        if self.play_activity is None:
+            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+        
+        df = self.play_activity.copy()
+        
+        if 'Event Start Timestamp' not in df.columns:
+            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+        
+        df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        df = df.dropna(subset=['Event Start Timestamp'])
+        
+        if year:
+            df = df[df['Event Start Timestamp'].dt.year == year]
+        
+        if 'Event Type' in df.columns:
+            df = df[df['Event Type'] == 'PLAY_END']
+        
+        # Get unique dates with listening activity
+        listening_dates = sorted(df['Event Start Timestamp'].dt.date.unique())
+        
+        if not listening_dates:
+            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+        
+        # Calculate streaks
+        longest_streak = 1
+        current_streak = 1
+        
+        from datetime import timedelta
+        
+        for i in range(1, len(listening_dates)):
+            if (listening_dates[i] - listening_dates[i-1]).days == 1:
+                current_streak += 1
+                longest_streak = max(longest_streak, current_streak)
+            else:
+                current_streak = 1
+        
+        return {
+            'longest_streak': longest_streak,
+            'current_streak': current_streak,
+            'total_listening_days': len(listening_dates)
+        }
+    
+    def get_diversity_score(self, year: Optional[int] = None) -> Dict:
+        """
+        Calculate music diversity/exploration metrics.
+        Inspired by jcblsn/apple-music-wrapped.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            Dictionary with diversity metrics
+        """
+        stats = self.get_play_stats(year)
+        top_songs = self.get_top_songs(100, year)
+        top_artists = self.get_top_artists(100, year)
+        
+        unique_songs = stats['unique_songs']
+        unique_artists = len(top_artists)
+        total_plays = stats['total_plays']
+        
+        # Calculate various diversity metrics
+        
+        # Songs per artist ratio (higher = more diverse)
+        songs_per_artist = unique_songs / max(unique_artists, 1)
+        
+        # Replay ratio (lower = more exploratory, higher = replay same songs)
+        replay_ratio = total_plays / max(unique_songs, 1)
+        
+        # Top 10 concentration (what % of plays are top 10 songs)
+        top_10_plays = top_songs.head(10)['play_count'].sum() if not top_songs.empty else 0
+        top_10_concentration = (top_10_plays / max(total_plays, 1)) * 100
+        
+        # Diversity score (0-100, higher = more diverse)
+        # Based on: low replay ratio + low top 10 concentration + high songs per artist
+        diversity_score = min(100, max(0, 
+            100 - (top_10_concentration * 0.5) - (replay_ratio * 5) + (songs_per_artist * 2)
+        ))
+        
+        return {
+            'diversity_score': round(diversity_score, 1),
+            'songs_per_artist': round(songs_per_artist, 1),
+            'replay_ratio': round(replay_ratio, 1),
+            'top_10_concentration': round(top_10_concentration, 1),
+            'unique_songs': unique_songs,
+            'unique_artists': unique_artists
+        }
+    
+    def get_peak_listening(self, year: Optional[int] = None) -> Dict:
+        """
+        Get peak listening times and dates.
+        
+        Args:
+            year: Optional year to filter by
+            
+        Returns:
+            Dictionary with peak listening info
+        """
+        hourly = self.get_listening_by_hour(year)
+        daily = self.get_listening_by_day_of_week(year)
+        monthly = self.get_listening_by_month(year)
+        
+        result = {
+            'peak_hour': None,
+            'peak_hour_plays': 0,
+            'peak_day': None,
+            'peak_day_plays': 0,
+            'peak_month': None,
+            'peak_month_plays': 0
+        }
+        
+        if not hourly.empty:
+            peak_hour_row = hourly.loc[hourly['play_count'].idxmax()]
+            result['peak_hour'] = int(peak_hour_row['hour'])
+            result['peak_hour_plays'] = int(peak_hour_row['play_count'])
+        
+        if not daily.empty:
+            peak_day_row = daily.loc[daily['play_count'].idxmax()]
+            result['peak_day'] = peak_day_row['day_name']
+            result['peak_day_plays'] = int(peak_day_row['play_count'])
+        
+        if not monthly.empty:
+            peak_month_row = monthly.loc[monthly['play_count'].idxmax()]
+            result['peak_month'] = peak_month_row['month']
+            result['peak_month_plays'] = int(peak_month_row['play_count'])
+        
+        return result
+    
     def get_summary(self, year: Optional[int] = None) -> Dict:
         """
         Get a complete summary of listening data.
@@ -480,7 +715,12 @@ class AppleMusicParser:
             'top_songs': self.get_top_songs(10, year).to_dict('records'),
             'top_artists': self.get_top_artists(10, year).to_dict('records'),
             'top_genres': self.get_top_genres(5, year).to_dict('records'),
-            'monthly': self.get_listening_by_month(year).to_dict('records')
+            'monthly': self.get_listening_by_month(year).to_dict('records'),
+            'hourly': self.get_listening_by_hour(year).to_dict('records'),
+            'daily': self.get_listening_by_day_of_week(year).to_dict('records'),
+            'streaks': self.get_listening_streaks(year),
+            'diversity': self.get_diversity_score(year),
+            'peak': self.get_peak_listening(year)
         }
 
 
