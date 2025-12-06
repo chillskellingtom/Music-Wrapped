@@ -54,12 +54,21 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import argparse
 import hashlib
+import tempfile
+from typing import Optional
 
 # Import the Apple Music parser from this project
 from apple_music_parser import AppleMusicParser
 
 # Import Supabase authentication (industry-standard, SOC2 certified)
 from auth_supabase import SupabaseAuth
+
+# Try to import Supabase for storage
+try:
+    from supabase import create_client
+    SUPABASE_STORAGE_AVAILABLE = True
+except ImportError:
+    SUPABASE_STORAGE_AVAILABLE = False
 
 
 # ============================================================================
@@ -105,6 +114,73 @@ st.markdown("""
 # ============================================================================
 # CACHING & DATA LOADING
 # ============================================================================
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def download_data_from_supabase(bucket_name: str = "apple-music-data") -> Optional[str]:
+    """
+    Download Apple Music data from Supabase Storage to a local temp directory.
+    
+    Returns:
+        Path to local data directory, or None if not available
+    """
+    if not SUPABASE_STORAGE_AVAILABLE:
+        return None
+    
+    if "supabase" not in st.secrets:
+        return None
+    
+    try:
+        # Create Supabase client
+        supabase = create_client(
+            st.secrets.supabase.url,
+            st.secrets.supabase.key
+        )
+        
+        # Create temp directory
+        temp_dir = Path(tempfile.mkdtemp(prefix="apple_music_"))
+        temp_dir.mkdir(exist_ok=True)
+        
+        # List files in bucket
+        try:
+            files = supabase.storage.from_(bucket_name).list()
+        except Exception as e:
+            st.warning(f"⚠️ Could not access Supabase Storage: {e}")
+            return None
+        
+        if not files:
+            return None
+        
+        # Download each file
+        downloaded = 0
+        with st.spinner("📥 Downloading data from secure storage..."):
+            for file_info in files:
+                if file_info.get("name"):
+                    file_path = file_info["name"]
+                    try:
+                        # Download file
+                        data = supabase.storage.from_(bucket_name).download(file_path)
+                        
+                        # Save to temp directory (preserve folder structure)
+                        local_path = temp_dir / file_path
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        with open(local_path, 'wb') as f:
+                            f.write(data)
+                        
+                        downloaded += 1
+                    except Exception as e:
+                        # Skip files that can't be downloaded
+                        continue
+        
+        if downloaded > 0:
+            return str(temp_dir)
+        else:
+            return None
+            
+    except Exception as e:
+        st.warning(f"⚠️ Could not load data from Supabase Storage: {e}")
+        return None
+
+
 @st.cache_resource
 def load_parser(data_dir: str, exclude_artists: list = None, 
                 exclude_songs: list = None, exclude_genres: list = None) -> AppleMusicParser:
@@ -663,16 +739,28 @@ def main():
     # Data directory input
     st.sidebar.subheader("📂 Data Source")
     
+    # Try to load from Supabase Storage first
+    supabase_data_dir = None
+    if SUPABASE_STORAGE_AVAILABLE and "supabase" in st.secrets:
+        supabase_data_dir = download_data_from_supabase()
+        if supabase_data_dir:
+            st.sidebar.success("✅ Data loaded from secure storage")
+    
     # Check for default path in secrets
     default_path = st.secrets.get("data", {}).get("default_path", "")
     if not default_path:
         default_path = default_data_dir or ""
     
-    data_dir = st.sidebar.text_input(
-        "Apple Music Activity folder",
-        value=default_path,
-        placeholder="/path/to/Apple Music Activity"
-    )
+    # Use Supabase data if available, otherwise allow manual input
+    if supabase_data_dir:
+        data_dir = supabase_data_dir
+        st.sidebar.info("📦 Using data from Supabase Storage")
+    else:
+        data_dir = st.sidebar.text_input(
+            "Apple Music Activity folder",
+            value=default_path,
+            placeholder="/path/to/Apple Music Activity"
+        )
     
     if not data_dir:
         st.title("🎵 Apple Music Wrapped Dashboard")
