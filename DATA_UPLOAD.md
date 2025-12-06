@@ -44,18 +44,54 @@ This ensures only logged-in users can access the data.
 
 ## Step 3: Upload the Data
 
-### Option A: Using the Upload Script (Recommended)
+### Option A: Manual Upload via Dashboard (Easiest & Most Secure) ⭐ RECOMMENDED
+
+1. Go to: **https://supabase.com/dashboard/project/cgmiuzcjowdtaawtdmrg/storage/buckets/apple-music-data**
+
+2. Click **"Upload file"**
+
+3. **For the large file (70MB):**
+   - First, compress it locally:
+     ```bash
+     cd "/Volumes/dbcooper/Downloads/Apple Media Services information/Apple_Media_Services/Apple Music Activity"
+     gzip -9 "Apple Music Play Activity.csv"
+     ```
+   - Upload: `Apple Music Play Activity.csv.gz` (will be ~7.7MB)
+
+4. **Upload the other essential files:**
+   - `Apple Music - Play History Daily Tracks.csv`
+   - `Apple Music - Track Play History.csv`
+   - `Apple Music Library Tracks.json`
+   - `Apple Music Library Artists.json`
+   - `Apple Music - Top Content.csv`
+
+5. **Done!** The dashboard will automatically decompress `.gz` files.
+
+---
+
+### Option B: Using the Upload Script (Requires Service Key)
+
+**First, get your Service Role Key:**
+
+1. Go to: **https://supabase.com/dashboard/project/cgmiuzcjowdtaawtdmrg/settings/api**
+2. Scroll to **"Project API keys"**
+3. Find **"service_role"** key (⚠️ **SECRET** - never expose this!)
+4. Copy it
+
+**Then run the upload:**
 
 ```bash
 cd "/Users/pathayes/Library/Mobile Documents/com~apple~CloudDocs/development/github/repo-clones/Music-Wrapped"
 
-# Set your Supabase credentials
+# Set your Supabase credentials (use SERVICE_ROLE key for uploads)
 export SUPABASE_URL="https://cgmiuzcjowdtaawtdmrg.supabase.co"
-export SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnbWl1emNqb3dkdGFhd3RkbXJnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUwNDA0NzQsImV4cCI6MjA4MDYxNjQ3NH0.52yU8sdhHGxbINez8Sn8TYVxMNKrIuU9vhheJDUmVRY"
+export SUPABASE_SERVICE_KEY="your-service-role-key-here"  # Get from Supabase Dashboard
 
 # Run the upload script
 python upload_data_to_supabase.py "/Volumes/dbcooper/Downloads/Apple Media Services information/Apple_Media_Services/Apple Music Activity"
 ```
+
+**Note:** The script automatically compresses large files (>10MB) to fit under the 50MB limit.
 
 ### Option B: Manual Upload via Supabase Dashboard
 

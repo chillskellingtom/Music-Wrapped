@@ -151,6 +151,8 @@ def download_data_from_supabase(bucket_name: str = "apple-music-data") -> Option
         
         # Download each file
         downloaded = 0
+        import gzip
+        
         with st.spinner("📥 Downloading data from secure storage..."):
             for file_info in files:
                 if file_info.get("name"):
@@ -159,10 +161,20 @@ def download_data_from_supabase(bucket_name: str = "apple-music-data") -> Option
                         # Download file
                         data = supabase.storage.from_(bucket_name).download(file_path)
                         
-                        # Save to temp directory (preserve folder structure)
-                        local_path = temp_dir / file_path
+                        # Determine local filename (remove .gz if compressed)
+                        if file_path.endswith('.gz'):
+                            local_filename = file_path[:-3]  # Remove .gz
+                        else:
+                            local_filename = file_path
+                        
+                        local_path = temp_dir / local_filename
                         local_path.parent.mkdir(parents=True, exist_ok=True)
                         
+                        # Decompress if needed
+                        if file_path.endswith('.gz'):
+                            data = gzip.decompress(data)
+                        
+                        # Save to temp directory
                         with open(local_path, 'wb') as f:
                             f.write(data)
                         
