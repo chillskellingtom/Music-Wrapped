@@ -662,9 +662,15 @@ def main():
     
     # Data directory input
     st.sidebar.subheader("📂 Data Source")
+    
+    # Check for default path in secrets
+    default_path = st.secrets.get("data", {}).get("default_path", "")
+    if not default_path:
+        default_path = default_data_dir or ""
+    
     data_dir = st.sidebar.text_input(
         "Apple Music Activity folder",
-        value=default_data_dir or "",
+        value=default_path,
         placeholder="/path/to/Apple Music Activity"
     )
     
@@ -999,4 +1005,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"❌ An error occurred: {e}")
+        st.exception(e)
+        st.info("Please check the Streamlit Cloud logs for more details.")

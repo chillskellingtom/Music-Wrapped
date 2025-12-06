@@ -77,16 +77,23 @@ class SupabaseAuth:
         if not SUPABASE_AVAILABLE:
             return
         
-        if "supabase" not in st.secrets:
-            return
-        
         try:
-            self.client = create_client(
-                st.secrets.supabase.url,
-                st.secrets.supabase.key
-            )
+            if "supabase" not in st.secrets:
+                return
+            
+            url = st.secrets.supabase.get("url", "")
+            key = st.secrets.supabase.get("key", "")
+            
+            if not url or not key:
+                return
+            
+            self.client = create_client(url, key)
+        except AttributeError:
+            # st.secrets might not be available
+            return
         except Exception as e:
-            st.error(f"Failed to initialize Supabase: {e}")
+            # Don't show error during init - will be handled in require_auth
+            pass
     
     def _init_session_state(self):
         """Initialize session state."""
@@ -122,10 +129,25 @@ class SupabaseAuth:
         if not SUPABASE_AVAILABLE:
             st.error("❌ Supabase not installed. Run: pip install supabase")
             st.stop()
+            return False
         
         if not self.client:
-            st.warning("⚠️ Supabase not configured. See auth_supabase.py for setup.")
-            return True  # Allow access if not configured
+            # Check if secrets exist but are invalid
+            if "supabase" in st.secrets:
+                url = st.secrets.supabase.get("url", "")
+                key = st.secrets.supabase.get("key", "")
+                if not url or not key:
+                    st.error("⚠️ Supabase URL or key missing in secrets. Please configure in Streamlit Cloud settings.")
+                    st.stop()
+                    return False
+                else:
+                    st.error("⚠️ Failed to connect to Supabase. Please check your credentials.")
+                    st.stop()
+                    return False
+            else:
+                st.error("⚠️ Supabase not configured. Please add secrets in Streamlit Cloud settings.")
+                st.stop()
+                return False
         
         # Check existing session
         if self._check_existing_session():
