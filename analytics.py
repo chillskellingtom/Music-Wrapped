@@ -45,7 +45,7 @@ class ListeningSummary:
     
     # Listening streaks
     longest_streak: int = 0
-    current_streak: int = 0
+    last_streak: int = 0  # Final streak in the data (not assuming ongoing)
     total_listening_days: int = 0
     
     # Diversity metrics
@@ -86,7 +86,7 @@ class ListeningSummary:
             'daily_stats': self.daily_stats,
             'streaks': {
                 'longest': self.longest_streak,
-                'current': self.current_streak,
+                'last': self.last_streak,
                 'total_days': self.total_listening_days
             },
             'diversity': {
@@ -232,7 +232,7 @@ class UnifiedAnalytics:
         # Listening streaks
         streaks = self._apple_parser.get_listening_streaks(year)
         summary.longest_streak = streaks['longest_streak']
-        summary.current_streak = streaks['current_streak']
+        summary.last_streak = streaks['last_streak']
         summary.total_listening_days = streaks['total_listening_days']
         
         # Diversity metrics

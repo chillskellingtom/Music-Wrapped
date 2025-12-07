@@ -711,12 +711,12 @@ class AppleMusicParser:
             Dictionary with streak statistics
         """
         if self.play_activity is None:
-            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+            return {'longest_streak': 0, 'last_streak': 0, 'total_listening_days': 0}
         
         df = self.play_activity.copy()
         
         if 'Event Start Timestamp' not in df.columns:
-            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+            return {'longest_streak': 0, 'last_streak': 0, 'total_listening_days': 0}
         
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
         df = df.dropna(subset=['Event Start Timestamp'])
@@ -731,10 +731,11 @@ class AppleMusicParser:
         listening_dates = sorted(df['Event Start Timestamp'].dt.date.unique())
         
         if not listening_dates:
-            return {'longest_streak': 0, 'current_streak': 0, 'total_listening_days': 0}
+            return {'longest_streak': 0, 'last_streak': 0, 'total_listening_days': 0}
         
         # Calculate streaks
         longest_streak = 1
+        last_streak = 1  # The final streak in the data (not assuming ongoing)
         current_streak = 1
         
         from datetime import timedelta
@@ -745,10 +746,13 @@ class AppleMusicParser:
                 longest_streak = max(longest_streak, current_streak)
             else:
                 current_streak = 1
+            # Track the last streak (final one in the data)
+            if i == len(listening_dates) - 1:
+                last_streak = current_streak
         
         return {
             'longest_streak': longest_streak,
-            'current_streak': current_streak,
+            'last_streak': last_streak,
             'total_listening_days': len(listening_dates)
         }
     

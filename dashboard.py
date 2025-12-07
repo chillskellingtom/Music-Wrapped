@@ -762,16 +762,16 @@ def render_streaks_calendar(df: pd.DataFrame, threshold_minutes: int = 15, weeks
     streak_sizes = df_day.groupby('streak_id', dropna=True).size()
     longest = int(streak_sizes.max()) if not streak_sizes.empty else 0
     
-    # Current streak
-    current = 0
+    # Last streak (final streak in the data, not assuming ongoing)
+    last_streak = 0
     if not df_day.empty and df_day.iloc[-1]['meets']:
         sid = df_day.iloc[-1]['streak_id']
-        current = int((df_day['streak_id'] == sid).sum())
+        last_streak = int((df_day['streak_id'] == sid).sum())
     
     # Display metrics
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("🔥 Current Streak", f"{current} days")
+        st.metric("🏁 Last Streak", f"{last_streak} days")
     with col2:
         st.metric("🏆 Longest Streak", f"{longest} days")
     
@@ -1318,11 +1318,23 @@ def main():
         render_hour_day_heatmap(df)
         
         st.subheader("🔥 Listening Streaks")
+        
+        # Calculate actual number of weeks in data
+        if not df.empty and 'date' in df.columns:
+            df_dates = pd.to_datetime(df['date'], errors='coerce').dropna()
+            if not df_dates.empty:
+                date_range = (df_dates.max() - df_dates.min()).days
+                max_weeks = max(52, (date_range // 7) + 1)  # At least 52, or actual weeks + buffer
+            else:
+                max_weeks = 52
+        else:
+            max_weeks = 52
+        
         col_thresh, col_weeks = st.columns(2)
         with col_thresh:
             threshold = st.slider("Threshold (min/day)", 5, 60, 15, 5)
         with col_weeks:
-            weeks = st.slider("Weeks to show", 8, 52, 26, 4)
+            weeks = st.slider("Weeks to show", 8, max_weeks, min(26, max_weeks), 4)
         
         render_streaks_calendar(df, threshold_minutes=threshold, weeks_back=weeks)
         
@@ -1505,7 +1517,7 @@ def main():
             
             st.metric("Total Listening Days", f"{streaks['total_listening_days']:,}")
             st.metric("Longest Streak", f"{streaks['longest_streak']} days")
-            st.metric("Current Streak", f"{streaks['current_streak']} days")
+            st.metric("Last Streak", f"{streaks['last_streak']} days")
             
             # Date range
             if stats['date_range']['start']:
