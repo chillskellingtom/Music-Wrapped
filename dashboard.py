@@ -149,6 +149,7 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         # Try to list files first (may fail due to RLS)
         files = []
         try:
+            # Try listing root directory
             files = supabase.storage.from_(bucket_name).list()
             if files is None:
                 files = []
@@ -163,9 +164,55 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
             # List might fail due to RLS, but we can still try direct downloads
             pass
         
+        # Also try listing with empty path and different path options
+        all_files = []
+        if files:
+            all_files.extend(files)
+        
+        # Try listing with path parameter (in case files are in subdirectories)
+        for path_option in ["", "/", None]:
+            try:
+                path_files = supabase.storage.from_(bucket_name).list(path=path_option) if path_option is not None else supabase.storage.from_(bucket_name).list()
+                if path_files and isinstance(path_files, list) and len(path_files) > 0:
+                    all_files.extend(path_files)
+            except:
+                pass
+        
+        # Remove duplicates
+        seen = set()
+        unique_files = []
+        for item in all_files:
+            name = None
+            if isinstance(item, dict):
+                name = item.get("name")
+            elif isinstance(item, str):
+                name = item
+            elif hasattr(item, "name"):
+                name = item.name
+            
+            if name and name not in seen:
+                seen.add(name)
+                unique_files.append(item)
+        
+        files = unique_files if unique_files else files
+        
         # Debug: Show raw response structure
         with st.sidebar.expander("🔍 Debug: Storage Response", expanded=False):
-            st.json({"files_count": len(files), "files_type": type(files).__name__, "first_item": files[0] if files else None})
+            file_names_debug = []
+            for item in files:
+                if isinstance(item, dict):
+                    file_names_debug.append(item.get("name", "unknown"))
+                elif isinstance(item, str):
+                    file_names_debug.append(item)
+                elif hasattr(item, "name"):
+                    file_names_debug.append(item.name)
+            
+            st.json({
+                "files_count": len(files), 
+                "files_type": type(files).__name__, 
+                "file_names": file_names_debug,
+                "first_item": files[0] if files else None
+            })
         
         # Known file names that we expect (in order of importance)
         expected_files = [
@@ -246,6 +293,13 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
             if failed_files:
                 error_details = "\n".join([f"  - {name}: {err}" for name, err in failed_files[:3]])
                 st.error(f"❌ **Download Failed**: Could not download any files.\n{error_details}")
+                st.markdown("""
+                **Troubleshooting:**
+                1. Go to [Supabase Storage](https://supabase.com/dashboard/project/cgmiuzcjowdtaawtdmrg/storage/buckets/apple-music-data)
+                2. Verify files are uploaded (check exact file names)
+                3. Ensure files are in the root of the bucket (not in subfolders)
+                4. Check that file names match exactly (case-sensitive, including spaces)
+                """)
             return None
             
     except Exception as e:
