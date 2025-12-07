@@ -56,6 +56,8 @@ import argparse
 import hashlib
 import tempfile
 from typing import Optional
+import requests
+import gzip
 
 # Import the Apple Music parser from this project
 from apple_music_parser import AppleMusicParser
@@ -215,14 +217,15 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
             })
         
         # Known file names that we expect (in order of importance)
+        # Note: Some files may be optional
         expected_files = [
-            "Apple Music Play Activity.csv.gz",  # Compressed main file
+            "Apple Music Play Activity.csv.gz",  # Compressed main file (REQUIRED)
             "Apple Music Play Activity.csv",  # Uncompressed (if uploaded that way)
-            "Apple Music - Play History Daily Tracks.csv",
-            "Apple Music - Track Play History.csv",
-            "Apple Music Library Tracks.json",
-            "Apple Music Library Artists.json",
-            "Apple Music - Top Content.csv",
+            "Apple Music - Play History Daily Tracks.csv",  # REQUIRED
+            "Apple Music Library Tracks.json",  # REQUIRED (for genres)
+            "Apple Music Library Artists.json",  # Optional
+            "Apple Music - Top Content.csv",  # Optional
+            "Apple Music - Track Play History.csv",  # Optional (may not exist)
         ]
         
         # If list() returned files, use those; otherwise try expected files
@@ -254,13 +257,51 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         # Download each file
         downloaded = 0
         failed_files = []
-        import gzip
         
         with st.spinner("📥 Downloading data from secure storage..."):
+            
             for file_path in files_to_download:
                 try:
-                    # Download file (will fail silently if file doesn't exist)
-                    data = supabase.storage.from_(bucket_name).download(file_path)
+                    # Try direct download first
+                    try:
+                        response = supabase.storage.from_(bucket_name).download(file_path)
+                        
+                        # Handle different response types
+                        if isinstance(response, bytes):
+                            data = response
+                        elif hasattr(response, 'content'):
+                            data = response.content
+                        elif hasattr(response, 'read'):
+                            data = response.read()
+                        else:
+                            data = bytes(response) if response else None
+                    except Exception as download_error:
+                        # If direct download fails, try signed URL
+                        error_str = str(download_error)
+                        if "404" in error_str or "not found" in error_str.lower():
+                            # File doesn't exist, skip it
+                            continue
+                        
+                        # Try signed URL as fallback
+                        try:
+                            signed_url = supabase.storage.from_(bucket_name).create_signed_url(file_path, 3600)
+                            if signed_url and 'signedURL' in signed_url:
+                                url = signed_url['signedURL']
+                            elif isinstance(signed_url, str):
+                                url = signed_url
+                            else:
+                                raise Exception("Could not create signed URL")
+                            
+                            # Download from signed URL
+                            http_response = requests.get(url, timeout=30)
+                            http_response.raise_for_status()
+                            data = http_response.content
+                        except Exception as signed_error:
+                            # Both methods failed
+                            raise download_error
+                    
+                    if not data:
+                        raise Exception("No data returned from download")
                     
                     # Determine local filename (remove .gz if compressed)
                     if file_path.endswith('.gz'):
@@ -280,9 +321,14 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                         f.write(data)
                     
                     downloaded += 1
+                    st.sidebar.success(f"✅ Downloaded: {local_filename}")
                 except Exception as e:
-                    # Track failed files
-                    failed_files.append((file_path, str(e)))
+                    error_str = str(e)
+                    # Only track as failed if it's not a 404 (file doesn't exist)
+                    # 404s for optional files are OK
+                    if "404" not in error_str and "not found" not in error_str.lower():
+                        failed_files.append((file_path, error_str))
+                    # For 404s, just skip (file might be optional)
                     continue
         
         if downloaded > 0:
