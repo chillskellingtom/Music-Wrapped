@@ -655,11 +655,11 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
                             enriched_count += 1
                             continue
                     
-                    # Try normalized
+                    # Try normalized (song|artist format to match build script)
                     normalized_song = ' '.join(song_name.split())
                     normalized_artist = ' '.join(artist.split()) if artist != 'unknown' else ''
                     if normalized_artist:
-                        normalized_key = f"{normalized_artist}|{normalized_song}"
+                        normalized_key = f"{normalized_song}|{normalized_artist}"
                         if normalized_key in song_artist_map:
                             song_stats.at[idx, 'Genre'] = song_artist_map[normalized_key]
                             enriched_count += 1

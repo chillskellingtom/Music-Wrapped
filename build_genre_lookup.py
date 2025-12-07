@@ -73,15 +73,16 @@ def load_library_tracks(data_dir: Path) -> Dict:
                 pass
         
         # Song Name + Artist -> Genre
+        # Key format: song|artist (matching dashboard format)
         if title and artist:
             key = f"{str(title).lower().strip()}|{str(artist).lower().strip()}"
             song_artist_to_genre[key] = genre
             
-            # Also normalized version
+            # Also normalized version (song|artist format)
             normalized_title = normalize_name(title)
             normalized_artist = normalize_name(artist)
             if normalized_title and normalized_artist:
-                normalized_key = f"{normalized_artist}|{normalized_title}"
+                normalized_key = f"{normalized_title}|{normalized_artist}"
                 song_artist_to_genre[normalized_key] = genre
         
         # Song Name -> Genre (fallback)
@@ -106,8 +107,8 @@ def load_library_tracks(data_dir: Path) -> Dict:
     }
 
 
-def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict) -> Dict:
-    """Enrich genre lookup from daily tracks (has Track Identifier)."""
+def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict, library_tracks: list) -> Dict:
+    """Enrich genre lookup from daily tracks using Track Identifier to match library_tracks."""
     daily_file = data_dir / "Apple Music - Play History Daily Tracks.csv"
     if not daily_file.exists():
         print(f"⚠️  {daily_file.name} not found")
@@ -117,36 +118,72 @@ def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict) -> Dict:
     try:
         df = pd.read_csv(daily_file, low_memory=False)
         
-        # If we have Track Identifier and Track Description, we can parse artist/song
-        if 'Track Identifier' in df.columns and 'Track Description' in df.columns:
-            track_id_map = genre_lookup.get('track_id_to_genre', {})
-            song_artist_map = genre_lookup.get('song_artist_to_genre', {})
-            
-            enriched = 0
+        # Build Track Identifier -> Genre map from library_tracks if not already done
+        track_id_to_genre = {}
+        for track in library_tracks:
+            track_id = track.get('Track Identifier')
+            genre = track.get('Genre', '')
+            if track_id and genre and str(genre).strip():
+                try:
+                    track_id_to_genre[int(track_id)] = str(genre).strip()
+                except (ValueError, TypeError):
+                    pass
+        
+        track_id_map = genre_lookup.get('track_id_to_genre', {})
+        song_artist_map = genre_lookup.get('song_artist_to_genre', {})
+        song_map = genre_lookup.get('song_to_genre', {})
+        
+        enriched_track_ids = 0
+        enriched_song_artist = 0
+        
+        # Process daily tracks
+        if 'Track Identifier' in df.columns:
             for _, row in df.iterrows():
                 track_id = row.get('Track Identifier')
                 track_desc = row.get('Track Description', '')
                 
-                # Try to get genre from Track Identifier if we have it
-                if pd.notna(track_id) and str(track_id) in track_id_map:
-                    continue  # Already have it
-                
-                # Parse Track Description (format: "Artist - Song")
-                if pd.notna(track_desc) and ' - ' in str(track_desc):
-                    parts = str(track_desc).split(' - ', 1)
-                    if len(parts) == 2:
-                        artist = parts[0].strip()
-                        song = parts[1].strip()
-                        
-                        # Add to song+artist map if not already there
-                        key = f"{song.lower().strip()}|{artist.lower().strip()}"
-                        if key not in song_artist_map:
-                            # We don't have genre from this source, but we can note the mapping exists
-                            pass
-            
-            print(f"   ✅ Processed {len(df)} daily track records")
+                # Try to get genre from Track Identifier
+                if pd.notna(track_id):
+                    try:
+                        track_id_int = int(track_id)
+                        if track_id_int in track_id_to_genre:
+                            genre = track_id_to_genre[track_id_int]
+                            # Add to track_id_map if not already there
+                            if str(track_id) not in track_id_map:
+                                track_id_map[str(track_id)] = genre
+                                enriched_track_ids += 1
+                            
+                            # Also add to song+artist map if we can parse Track Description
+                            if pd.notna(track_desc) and ' - ' in str(track_desc):
+                                parts = str(track_desc).split(' - ', 1)
+                                if len(parts) == 2:
+                                    artist = parts[0].strip()
+                                    song = parts[1].strip()
+                                    # Key format: song|artist (matching dashboard)
+                                    key = f"{song.lower().strip()}|{artist.lower().strip()}"
+                                    if key not in song_artist_map:
+                                        song_artist_map[key] = genre
+                                        enriched_song_artist += 1
+                                    
+                                    # Also add to song map
+                                    song_lower = song.lower().strip()
+                                    if song_lower not in song_map:
+                                        song_map[song_lower] = genre
+                    except (ValueError, TypeError):
+                        pass
+        
+        # Update genre_lookup with new mappings
+        genre_lookup['track_id_to_genre'] = track_id_map
+        genre_lookup['song_artist_to_genre'] = song_artist_map
+        genre_lookup['song_to_genre'] = song_map
+        
+        print(f"   ✅ Enriched {enriched_track_ids} Track ID mappings from daily_tracks")
+        print(f"   ✅ Enriched {enriched_song_artist} Song+Artist mappings from daily_tracks")
+        print(f"   ✅ Processed {len(df)} daily track records")
     except Exception as e:
         print(f"   ⚠️  Error processing daily tracks: {e}")
+        import traceback
+        traceback.print_exc()
     
     return genre_lookup
 
@@ -167,8 +204,15 @@ def build_genre_lookup(data_dir: str, output_file: Optional[str] = None) -> str:
     # Start with library tracks (most reliable)
     genre_lookup = load_library_tracks(data_path)
     
+    # Load library tracks for enrichment
+    library_file = data_path / "Apple Music Library Tracks.json"
+    library_tracks = []
+    if library_file.exists():
+        with open(library_file, 'r', encoding='utf-8') as f:
+            library_tracks = json.load(f)
+    
     # Enrich from other sources
-    genre_lookup = enrich_from_daily_tracks(data_path, genre_lookup)
+    genre_lookup = enrich_from_daily_tracks(data_path, genre_lookup, library_tracks)
     
     # Add metadata
     genre_lookup['metadata'] = {
