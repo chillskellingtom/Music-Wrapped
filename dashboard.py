@@ -1559,7 +1559,9 @@ def main():
             
             st.metric("Total Listening Days", f"{streaks['total_listening_days']:,}")
             st.metric("Longest Streak", f"{streaks['longest_streak']} days")
-            st.metric("Last Streak", f"{streaks['last_streak']} days")
+            # Handle both 'last_streak' and 'current_streak' for backwards compatibility
+            last_streak_value = streaks.get('last_streak', streaks.get('current_streak', 0))
+            st.metric("Last Streak", f"{last_streak_value} days")
             
             # Date range
             if stats['date_range']['start']:

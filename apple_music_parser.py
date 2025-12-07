@@ -735,7 +735,6 @@ class AppleMusicParser:
         
         # Calculate streaks
         longest_streak = 1
-        last_streak = 1  # The final streak in the data (not assuming ongoing)
         current_streak = 1
         
         from datetime import timedelta
@@ -746,9 +745,9 @@ class AppleMusicParser:
                 longest_streak = max(longest_streak, current_streak)
             else:
                 current_streak = 1
-            # Track the last streak (final one in the data)
-            if i == len(listening_dates) - 1:
-                last_streak = current_streak
+        
+        # The last streak is the final streak in the data (current_streak after loop completes)
+        last_streak = current_streak
         
         return {
             'longest_streak': longest_streak,
