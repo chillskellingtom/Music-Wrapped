@@ -495,19 +495,40 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
         song_stats['Artist'] = 'Unknown'
         
         # Try to get from daily tracks or track history
+        # Check for various artist column names
+        artist_cols_to_try = ['Artist Name', 'Artist', 'Container Artist Name', 'Media Item Artist Name']
+        
         if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
-            # Map artists from daily tracks
-            if 'Artist Name' in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
-                artist_map = _parser.daily_tracks.set_index('Song Name')['Artist Name'].to_dict()
-                song_stats['Artist'] = song_stats['Song Name'].map(artist_map).fillna('Unknown')
+            # Find which artist column exists
+            artist_col = None
+            for col in artist_cols_to_try:
+                if col in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
+                    artist_col = col
+                    break
+            
+            if artist_col:
+                logger.info(f"Using '{artist_col}' from daily_tracks for artist data")
+                artist_map = _parser.daily_tracks.set_index('Song Name')[artist_col].to_dict()
+                # Normalize for matching
+                normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and v != ''}
+                song_stats['Artist'] = song_stats['Song Name'].str.lower().str.strip().map(normalized_map).fillna('Unknown')
         
         if _parser.track_history is not None and not _parser.track_history.empty:
             # Also try track history
-            if 'Artist Name' in _parser.track_history.columns and 'Song Name' in _parser.track_history.columns:
-                artist_map = _parser.track_history.set_index('Song Name')['Artist Name'].to_dict()
+            artist_col = None
+            for col in artist_cols_to_try:
+                if col in _parser.track_history.columns and 'Song Name' in _parser.track_history.columns:
+                    artist_col = col
+                    break
+            
+            if artist_col:
+                logger.info(f"Using '{artist_col}' from track_history for remaining artist data")
+                artist_map = _parser.track_history.set_index('Song Name')[artist_col].to_dict()
+                # Normalize for matching
+                normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and v != ''}
                 # Only update if still Unknown
                 mask = song_stats['Artist'] == 'Unknown'
-                song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].map(artist_map).fillna('Unknown')
+                song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map).fillna('Unknown')
     
     if 'Album Name' in song_stats.columns:
         song_stats = song_stats.rename(columns={'Album Name': 'Album'})
@@ -523,6 +544,20 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     # Create a more robust mapping using both song name and artist
     genre_map_by_name = {}
     genre_map_by_artist_song = {}
+    genre_map_normalized = {}  # Normalized (strip, lowercase, no special chars)
+    
+    def normalize_name(name):
+        """Normalize a name for better matching."""
+        if not name:
+            return ''
+        # Lowercase, strip, remove common punctuation
+        normalized = str(name).lower().strip()
+        # Remove common punctuation that might differ
+        for char in ['(', ')', '[', ']', '-', '_', '.', ',', '!', '?']:
+            normalized = normalized.replace(char, ' ')
+        # Collapse multiple spaces
+        normalized = ' '.join(normalized.split())
+        return normalized
     
     if _parser.library_tracks:
         logger.info(f"Loading genres from {len(_parser.library_tracks)} library tracks")
@@ -532,30 +567,40 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
             genre = track.get('Genre', '')
             
             if track_name and genre:
-                # Map by song name
-                genre_map_by_name[track_name.lower()] = genre
+                # Map by exact song name (lowercase)
+                genre_map_by_name[track_name.lower().strip()] = genre
+                
+                # Map by normalized song name (for fuzzy matching)
+                normalized_name = normalize_name(track_name)
+                if normalized_name:
+                    genre_map_normalized[normalized_name] = genre
                 
                 # Also map by artist + song for better matching
                 if artist:
-                    key = f"{artist.lower()}|{track_name.lower()}"
+                    key = f"{artist.lower().strip()}|{track_name.lower().strip()}"
                     genre_map_by_artist_song[key] = genre
         
-        logger.info(f"Created genre maps: {len(genre_map_by_name)} by name, {len(genre_map_by_artist_song)} by artist+song")
+        logger.info(f"Created genre maps: {len(genre_map_by_name)} by name, {len(genre_map_by_artist_song)} by artist+song, {len(genre_map_normalized)} normalized")
     else:
         logger.warning("No library_tracks available for genre mapping")
     
     # Try to match genres
     def get_genre(row):
-        song_name = str(row['Song Name']).lower()
-        artist = str(row.get('Artist', '')).lower()
+        song_name = str(row['Song Name']).strip()
+        artist = str(row.get('Artist', '')).strip()
         
-        # First try exact song name match
-        if song_name in genre_map_by_name:
-            return genre_map_by_name[song_name]
+        # Try exact match (lowercase)
+        if song_name.lower() in genre_map_by_name:
+            return genre_map_by_name[song_name.lower()]
         
-        # Then try artist + song match
-        if artist and artist != 'unknown':
-            key = f"{artist}|{song_name}"
+        # Try normalized match (fuzzy)
+        normalized_song = normalize_name(song_name)
+        if normalized_song and normalized_song in genre_map_normalized:
+            return genre_map_normalized[normalized_song]
+        
+        # Try artist + song match
+        if artist and artist.lower() != 'unknown':
+            key = f"{artist.lower()}|{song_name.lower()}"
             if key in genre_map_by_artist_song:
                 return genre_map_by_artist_song[key]
         
@@ -564,10 +609,15 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     song_stats['Genre'] = song_stats.apply(get_genre, axis=1)
     
     # Log summary
-    artists_found = (song_stats['Artist'] != 'Unknown').sum()
-    genres_found = (song_stats['Genre'] != 'Unknown').sum()
+    artists_found = (song_stats['Artist'] != 'Unknown').sum() if 'Artist' in song_stats.columns else 0
+    genres_found = (song_stats['Genre'] != 'Unknown').sum() if 'Genre' in song_stats.columns else 0
     logger.info(f"Artist data: {artists_found}/{len(song_stats)} songs have artist info")
     logger.info(f"Genre data: {genres_found}/{len(song_stats)} songs have genre info")
+    
+    # Debug: Show sample of data
+    if logger.level == logging.DEBUG and not song_stats.empty:
+        sample = song_stats.head(5)[['Song Name', 'Artist', 'Genre']].to_dict('records')
+        logger.debug(f"Sample data: {sample}")
     
     # Sort by plays
     song_stats = song_stats.sort_values('Plays', ascending=False)
@@ -1260,6 +1310,25 @@ def main():
         
         num_songs = st.slider("Show top N songs", 10, 50, 20, 5, key='song_slider')
         songs_df = apple_parser.get_top_songs(num_songs, year_filter)
+        
+        # Enrich with artist data from other sources if missing
+        if 'Artist Name' not in songs_df.columns or songs_df['Artist Name'].isna().all():
+            logger.info("Artist Name missing in top songs, trying to enrich from other sources")
+            # Try to get from daily tracks
+            if apple_parser.daily_tracks is not None and not apple_parser.daily_tracks.empty:
+                if 'Artist Name' in apple_parser.daily_tracks.columns and 'Song Name' in apple_parser.daily_tracks.columns:
+                    artist_map = apple_parser.daily_tracks.set_index('Song Name')['Artist Name'].to_dict()
+                    songs_df['Artist Name'] = songs_df['Song Name'].map(artist_map)
+            
+            # Try track history if still missing
+            if songs_df['Artist Name'].isna().any() and apple_parser.track_history is not None and not apple_parser.track_history.empty:
+                if 'Artist Name' in apple_parser.track_history.columns and 'Song Name' in apple_parser.track_history.columns:
+                    artist_map = apple_parser.track_history.set_index('Song Name')['Artist Name'].to_dict()
+                    mask = songs_df['Artist Name'].isna()
+                    songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].map(artist_map)
+            
+            # Fill remaining with Unknown
+            songs_df['Artist Name'] = songs_df['Artist Name'].fillna('Unknown')
         
         render_top_songs_chart(songs_df, num_songs)
         
