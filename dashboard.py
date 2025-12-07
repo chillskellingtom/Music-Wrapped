@@ -243,8 +243,10 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
             "Apple Music - Play History Daily Tracks.csv",  # REQUIRED
             "Apple Music Library Tracks.json",  # REQUIRED (for genres)
             "Apple Music Library Artists.json",  # Optional
+            "Apple Music Library Albums.json",  # Optional (for album metadata)
             "Apple Music - Top Content.csv",  # Optional
             "Apple Music - Track Play History.csv",  # Optional (may not exist)
+            "Identifier Information.json",  # Optional (may help with matching)
         ]
         
         # If list() returned files, use those; otherwise try expected files

@@ -177,14 +177,16 @@ def upload_data_folder(data_dir: str, bucket_name: str = "apple-music-data"):
     # Upload files
     print(f"\n📤 Uploading essential files to bucket '{bucket}'...")
     
-    # Only upload files actually used by the parser
+    # Upload files used by the parser, plus potentially useful ones
     essential_files = [
         "Apple Music Play Activity.csv",  # Main file (may be too large)
         "Apple Music - Play History Daily Tracks.csv",
         "Apple Music - Track Play History.csv",
-        "Apple Music Library Tracks.json",  # For genres
-        "Apple Music Library Artists.json",  # Optional but useful
-        "Apple Music - Top Content.csv",  # Optional
+        "Apple Music Library Tracks.json",  # For genres (REQUIRED)
+        "Apple Music Library Artists.json",  # For artist info
+        "Apple Music Library Albums.json",  # For album metadata/art (potentially useful)
+        "Apple Music - Top Content.csv",  # Top content stats
+        "Identifier Information.json",  # May help with matching (potentially useful)
     ]
     
     uploaded = 0
