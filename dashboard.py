@@ -259,8 +259,14 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         failed_files = []
         
         with st.spinner("📥 Downloading data from secure storage..."):
+            progress_bar = st.progress(0)
+            total_files = len(files_to_download)
             
-            for file_path in files_to_download:
+            for idx, file_path in enumerate(files_to_download):
+                progress_bar.progress((idx + 1) / total_files)
+                status_text = st.empty()
+                status_text.text(f"Downloading {file_path}... ({idx + 1}/{total_files})")
+                
                 try:
                     # Try direct download first
                     try:
@@ -321,7 +327,7 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                         f.write(data)
                     
                     downloaded += 1
-                    st.sidebar.success(f"✅ Downloaded: {local_filename}")
+                    status_text.success(f"✅ Downloaded: {local_filename}")
                 except Exception as e:
                     error_str = str(e)
                     # Only track as failed if it's not a 404 (file doesn't exist)
@@ -329,7 +335,11 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                     if "404" not in error_str and "not found" not in error_str.lower():
                         failed_files.append((file_path, error_str))
                     # For 404s, just skip (file might be optional)
+                    status_text.empty()
                     continue
+            
+            # Clear progress indicators
+            progress_bar.empty()
         
         if downloaded > 0:
             if failed_files:
