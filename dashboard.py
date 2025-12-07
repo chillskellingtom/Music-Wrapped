@@ -627,6 +627,35 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
                         except (ValueError, TypeError):
                             pass
                 logger.info(f"Enriched {enriched_count} genres using Track Identifier mapping")
+    elif _parser.library_tracks:
+        # Fallback: Match by Song Name + Artist to library_tracks
+        logger.info("Track Identifier not in play_activity. Matching genres by Song Name + Artist to library_tracks")
+        # Build Song Name + Artist to Genre map from library_tracks
+        song_artist_to_genre = {}
+        for track in _parser.library_tracks:
+            track_name = track.get('Title', track.get('Name', ''))
+            artist = track.get('Artist', track.get('Album Artist', ''))
+            genre = track.get('Genre', '')
+            if track_name and artist and genre and str(genre).strip():
+                # Create normalized key for matching
+                key = f"{str(track_name).lower().strip()}|{str(artist).lower().strip()}"
+                song_artist_to_genre[key] = str(genre).strip()
+        
+        if song_artist_to_genre:
+            logger.info(f"Built Song+Artist genre map with {len(song_artist_to_genre)} entries")
+            # Match by Song Name + Artist
+            mask = song_stats['Genre'] == 'Unknown'
+            if mask.any():
+                enriched_count = 0
+                for idx in song_stats[mask].index:
+                    song_name = str(song_stats.at[idx, 'Song Name']).lower().strip()
+                    artist = str(song_stats.at[idx, 'Artist']).lower().strip()
+                    if artist and artist != 'unknown':
+                        key = f"{song_name}|{artist}"
+                        if key in song_artist_to_genre:
+                            song_stats.at[idx, 'Genre'] = song_artist_to_genre[key]
+                            enriched_count += 1
+                logger.info(f"Enriched {enriched_count} genres using Song+Artist matching to library_tracks")
     
     # PRIORITY 2: Try to get genre from enriched daily_tracks (has Genre from identifier mapping)
     if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
@@ -646,6 +675,7 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     genre_map_by_name = {}
     genre_map_by_artist_song = {}
     genre_map_normalized = {}  # Normalized (strip, lowercase, no special chars)
+    genre_map_normalized_artist_song = {}  # Normalized artist+song
     
     def normalize_name(name):
         """Normalize a name for better matching."""
@@ -654,7 +684,7 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
         # Lowercase, strip, remove common punctuation
         normalized = str(name).lower().strip()
         # Remove common punctuation that might differ
-        for char in ['(', ')', '[', ']', '-', '_', '.', ',', '!', '?']:
+        for char in ['(', ')', '[', ']', '-', '_', '.', ',', '!', '?', '&', "'", '"']:
             normalized = normalized.replace(char, ' ')
         # Collapse multiple spaces
         normalized = ' '.join(normalized.split())
@@ -680,8 +710,14 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
                 if artist:
                     key = f"{artist.lower().strip()}|{track_name.lower().strip()}"
                     genre_map_by_artist_song[key] = genre
+                    
+                    # Also create normalized version
+                    normalized_artist = normalize_name(artist)
+                    if normalized_artist and normalized_name:
+                        normalized_key = f"{normalized_artist}|{normalized_name}"
+                        genre_map_normalized_artist_song[normalized_key] = genre
         
-        logger.info(f"Created genre maps: {len(genre_map_by_name)} by name, {len(genre_map_by_artist_song)} by artist+song, {len(genre_map_normalized)} normalized")
+        logger.info(f"Created genre maps: {len(genre_map_by_name)} by name, {len(genre_map_by_artist_song)} by artist+song, {len(genre_map_normalized)} normalized, {len(genre_map_normalized_artist_song)} normalized artist+song")
     else:
         logger.warning("No library_tracks available for genre mapping")
     
@@ -704,18 +740,30 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
         if normalized_song and normalized_song in genre_map_normalized:
             return genre_map_normalized[normalized_song]
         
-        # Try artist + song match
+        # Try artist + song match (exact)
         if artist and artist.lower() != 'unknown':
             key = f"{artist.lower()}|{song_name.lower()}"
             if key in genre_map_by_artist_song:
                 return genre_map_by_artist_song[key]
+            
+            # Try normalized artist + song match
+            normalized_artist = normalize_name(artist)
+            if normalized_artist and normalized_song:
+                normalized_key = f"{normalized_artist}|{normalized_song}"
+                if normalized_key in genre_map_normalized_artist_song:
+                    return genre_map_normalized_artist_song[normalized_key]
         
         return 'Unknown'
     
     # Only update Unknown genres
     mask = song_stats['Genre'] == 'Unknown'
     if mask.any():
+        before_count = (~mask).sum()
         song_stats.loc[mask, 'Genre'] = song_stats.loc[mask].apply(get_genre, axis=1)
+        after_count = (song_stats['Genre'] != 'Unknown').sum()
+        enriched = after_count - before_count
+        if enriched > 0:
+            logger.info(f"Enriched {enriched} additional genres using name-based matching from library_tracks")
     
     # Log summary
     artists_found = (song_stats['Artist'] != 'Unknown').sum() if 'Artist' in song_stats.columns else 0
