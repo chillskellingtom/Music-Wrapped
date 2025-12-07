@@ -196,10 +196,19 @@ def upload_data_folder(data_dir: str, bucket_name: str = "apple-music-data"):
     for filename in essential_files:
         file_path = data_path / filename
         
+        # Check if file exists, or if it's already compressed
         if not file_path.exists():
-            print(f"  ⚠️  {filename} not found, skipping")
-            skipped += 1
-            continue
+            # Try compressed version
+            compressed_path = data_path / (filename + ".gz")
+            if compressed_path.exists():
+                print(f"  ℹ️  {filename} not found, but {filename}.gz exists")
+                print(f"     Uploading compressed version...")
+                file_path = compressed_path
+                filename = filename + ".gz"
+            else:
+                print(f"  ⚠️  {filename} not found, skipping")
+                skipped += 1
+                continue
         
         # Upload file (will auto-compress if >10MB to fit under 50MB limit)
         if upload_file(supabase, bucket, file_path, filename, compress=True):
