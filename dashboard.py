@@ -247,6 +247,7 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
             "Apple Music - Top Content.csv",  # Optional
             "Apple Music - Track Play History.csv",  # Optional (may not exist)
             "Identifier Information.json",  # Optional (may help with matching)
+            "genre_lookup.json",  # Comprehensive genre lookup (if generated)
         ]
         
         # If list() returned files, use those; otherwise try expected files
@@ -429,6 +430,24 @@ def get_play_activity_df(_parser: AppleMusicParser, year: int = None) -> pd.Data
 
 
 @st.cache_data
+def load_genre_lookup(data_dir: str) -> Optional[Dict]:
+    """Load comprehensive genre lookup JSON if available."""
+    import json
+    from pathlib import Path
+    
+    lookup_file = Path(data_dir) / "genre_lookup.json"
+    if not lookup_file.exists():
+        return None
+    
+    try:
+        with open(lookup_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not load genre_lookup.json: {e}")
+        return None
+
+
+@st.cache_data
 def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.DataFrame:
     """
     Build a comprehensive table with song, artist, plays, genre, and album info.
@@ -595,6 +614,74 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     # Initialize genre column
     if 'Genre' not in song_stats.columns:
         song_stats['Genre'] = 'Unknown'
+    
+    # PRIORITY 0: Use comprehensive genre_lookup.json if available (highest priority)
+    genre_lookup = None
+    # Get data_dir from parser (it's stored as Path object)
+    parser_data_dir = getattr(_parser, 'data_dir', None)
+    if parser_data_dir:
+        genre_lookup = load_genre_lookup(str(parser_data_dir))
+    
+    if genre_lookup:
+        logger.info("Using comprehensive genre_lookup.json for genre matching")
+        track_id_map = genre_lookup.get('track_id_to_genre', {})
+        song_artist_map = genre_lookup.get('song_artist_to_genre', {})
+        song_map = genre_lookup.get('song_to_genre', {})
+        song_normalized_map = genre_lookup.get('song_normalized_to_genre', {})
+        
+        mask = song_stats['Genre'] == 'Unknown'
+        if mask.any():
+            enriched_count = 0
+            
+            # Try Track Identifier first
+            if 'Track Identifier' in song_stats.columns:
+                for idx in song_stats[mask].index:
+                    track_id = song_stats.at[idx, 'Track Identifier']
+                    if pd.notna(track_id) and str(track_id) in track_id_map:
+                        song_stats.at[idx, 'Genre'] = track_id_map[str(track_id)]
+                        enriched_count += 1
+                        continue
+            
+            # Try Song Name + Artist
+            mask = song_stats['Genre'] == 'Unknown'
+            if mask.any():
+                for idx in song_stats[mask].index:
+                    song_name = str(song_stats.at[idx, 'Song Name']).lower().strip()
+                    artist = str(song_stats.at[idx, 'Artist']).lower().strip()
+                    if artist and artist != 'unknown':
+                        key = f"{song_name}|{artist}"
+                        if key in song_artist_map:
+                            song_stats.at[idx, 'Genre'] = song_artist_map[key]
+                            enriched_count += 1
+                            continue
+                    
+                    # Try normalized
+                    normalized_song = ' '.join(song_name.split())
+                    normalized_artist = ' '.join(artist.split()) if artist != 'unknown' else ''
+                    if normalized_artist:
+                        normalized_key = f"{normalized_artist}|{normalized_song}"
+                        if normalized_key in song_artist_map:
+                            song_stats.at[idx, 'Genre'] = song_artist_map[normalized_key]
+                            enriched_count += 1
+                            continue
+            
+            # Try Song Name only
+            mask = song_stats['Genre'] == 'Unknown'
+            if mask.any():
+                for idx in song_stats[mask].index:
+                    song_name = str(song_stats.at[idx, 'Song Name']).lower().strip()
+                    if song_name in song_map:
+                        song_stats.at[idx, 'Genre'] = song_map[song_name]
+                        enriched_count += 1
+                        continue
+                    
+                    # Try normalized
+                    normalized_song = ' '.join(song_name.split())
+                    if normalized_song in song_normalized_map:
+                        song_stats.at[idx, 'Genre'] = song_normalized_map[normalized_song]
+                        enriched_count += 1
+            
+            logger.info(f"Enriched {enriched_count} genres using genre_lookup.json")
     
     # PRIORITY 1: Use Track Identifier from play_activity to directly match library_tracks for genre
     # This is the most reliable method since it uses the exact track ID

@@ -187,6 +187,7 @@ def upload_data_folder(data_dir: str, bucket_name: str = "apple-music-data"):
         "Apple Music Library Albums.json",  # For album metadata/art (potentially useful)
         "Apple Music - Top Content.csv",  # Top content stats
         "Identifier Information.json",  # May help with matching (potentially useful)
+        "genre_lookup.json",  # Comprehensive genre lookup (if generated)
     ]
     
     uploaded = 0
