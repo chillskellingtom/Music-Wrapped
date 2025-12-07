@@ -154,21 +154,35 @@ class AppleMusicParser:
                     df['Genre'] = ''
                 
                 # Enrich using Track Identifier
+                enriched_count = 0
                 if 'Track Identifier' in df.columns:
                     for idx, row in df.iterrows():
                         track_id = row.get('Track Identifier')
-                        if pd.notna(track_id) and int(track_id) in track_id_map:
-                            metadata = track_id_map[int(track_id)]
-                            if not df.at[idx, 'Song Name']:
-                                df.at[idx, 'Song Name'] = metadata.get('Title', '')
-                            if not df.at[idx, 'Artist Name']:
-                                df.at[idx, 'Artist Name'] = metadata.get('Artist', '') or metadata.get('Album Artist', '')
-                            if not df.at[idx, 'Album Name']:
-                                df.at[idx, 'Album Name'] = metadata.get('Album', '')
-                            if not df.at[idx, 'Genre']:
-                                df.at[idx, 'Genre'] = metadata.get('Genre', '')
+                        if pd.notna(track_id):
+                            try:
+                                track_id_int = int(track_id)
+                                if track_id_int in track_id_map:
+                                    metadata = track_id_map[track_id_int]
+                                    if not df.at[idx, 'Song Name']:
+                                        df.at[idx, 'Song Name'] = metadata.get('Title', '')
+                                    if not df.at[idx, 'Artist Name']:
+                                        df.at[idx, 'Artist Name'] = metadata.get('Artist', '') or metadata.get('Album Artist', '')
+                                    if not df.at[idx, 'Album Name']:
+                                        df.at[idx, 'Album Name'] = metadata.get('Album', '')
+                                    if not df.at[idx, 'Genre']:
+                                        df.at[idx, 'Genre'] = metadata.get('Genre', '')
+                                    enriched_count += 1
+                            except (ValueError, TypeError):
+                                pass
+                
+                # Log enrichment stats
+                if enriched_count > 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Enriched {enriched_count}/{len(df)} daily_tracks rows using Track Identifier mapping")
                 
                 # Fallback: Parse Track Description if metadata still missing
+                parsed_count = 0
                 if 'Track Description' in df.columns:
                     for idx, row in df.iterrows():
                         # Only parse if we don't have the data yet
@@ -178,8 +192,14 @@ class AppleMusicParser:
                                 artist, song = self._parse_track_description(description)
                                 if artist and not df.at[idx, 'Artist Name']:
                                     df.at[idx, 'Artist Name'] = artist
+                                    parsed_count += 1
                                 if song and not df.at[idx, 'Song Name']:
                                     df.at[idx, 'Song Name'] = song
+                
+                if parsed_count > 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Parsed Track Description for {parsed_count} additional daily_tracks rows")
                 
                 self._daily_tracks = df
             else:
@@ -199,6 +219,7 @@ class AppleMusicParser:
                     df['Artist Name'] = ''
                 
                 # Parse Track Name (format: "Artist - Song" or "Artist, Feature - Song")
+                parsed_count = 0
                 if 'Track Name' in df.columns:
                     for idx, row in df.iterrows():
                         track_name = row.get('Track Name', '')
@@ -206,8 +227,14 @@ class AppleMusicParser:
                             artist, song = self._parse_track_description(track_name)
                             if artist:
                                 df.at[idx, 'Artist Name'] = artist
+                                parsed_count += 1
                             if song:
                                 df.at[idx, 'Song Name'] = song
+                
+                if parsed_count > 0:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Parsed Track Name for {parsed_count} track_history rows")
                 
                 self._track_history = df
             else:
