@@ -150,14 +150,27 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         try:
             files = supabase.storage.from_(bucket_name).list()
         except Exception as e:
-            st.warning(f"⚠️ Could not access Supabase Storage: {e}")
+            error_msg = str(e)
+            if "403" in error_msg or "Unauthorized" in error_msg:
+                st.error(f"❌ **Access Denied**: Could not access bucket '{bucket_name}'. Check RLS policies in Supabase.")
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                st.error(f"❌ **Bucket Not Found**: Bucket '{bucket_name}' doesn't exist. Check the bucket name in secrets.")
+            else:
+                st.error(f"❌ **Storage Error**: {error_msg}")
             return None
         
         if not files:
+            st.warning(f"⚠️ Bucket '{bucket_name}' is empty. Upload files to Supabase Storage first.")
             return None
+        
+        # Debug: Show what files were found
+        file_names = [f.get("name", "unknown") for f in files if f.get("name")]
+        if file_names:
+            st.info(f"📦 Found {len(file_names)} file(s) in bucket: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
         
         # Download each file
         downloaded = 0
+        failed_files = []
         import gzip
         
         with st.spinner("📥 Downloading data from secure storage..."):
@@ -187,12 +200,18 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                         
                         downloaded += 1
                     except Exception as e:
-                        # Skip files that can't be downloaded
+                        # Track failed files
+                        failed_files.append((file_path, str(e)))
                         continue
         
         if downloaded > 0:
+            if failed_files:
+                st.warning(f"⚠️ Downloaded {downloaded} file(s), but {len(failed_files)} failed. Check RLS policies.")
             return str(temp_dir)
         else:
+            if failed_files:
+                error_details = "\n".join([f"  - {name}: {err}" for name, err in failed_files[:3]])
+                st.error(f"❌ **Download Failed**: Could not download any files.\n{error_details}")
             return None
             
     except Exception as e:
@@ -761,6 +780,13 @@ def main():
     # Try to load from Supabase Storage first
     supabase_data_dir = None
     if SUPABASE_STORAGE_AVAILABLE and "supabase" in st.secrets:
+        # Show debug info in expander
+        with st.sidebar.expander("🔧 Debug: Supabase Config", expanded=False):
+            bucket_name = st.secrets.supabase.get("bucket_name", "apple-music-data")
+            st.text(f"Bucket: {bucket_name}")
+            st.text(f"URL: {st.secrets.supabase.url[:30]}...")
+            st.text(f"Key: {'✅ Set' if st.secrets.supabase.key else '❌ Missing'}")
+        
         supabase_data_dir = download_data_from_supabase()
         if supabase_data_dir:
             st.sidebar.success("✅ Data loaded from secure storage")
