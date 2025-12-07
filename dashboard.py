@@ -214,29 +214,29 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                 try:
                     # Download file (will fail silently if file doesn't exist)
                     data = supabase.storage.from_(bucket_name).download(file_path)
-                        
-                        # Determine local filename (remove .gz if compressed)
-                        if file_path.endswith('.gz'):
-                            local_filename = file_path[:-3]  # Remove .gz
-                        else:
-                            local_filename = file_path
-                        
-                        local_path = temp_dir / local_filename
-                        local_path.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        # Decompress if needed
-                        if file_path.endswith('.gz'):
-                            data = gzip.decompress(data)
-                        
-                        # Save to temp directory
-                        with open(local_path, 'wb') as f:
-                            f.write(data)
-                        
-                        downloaded += 1
-                    except Exception as e:
-                        # Track failed files
-                        failed_files.append((file_path, str(e)))
-                        continue
+                    
+                    # Determine local filename (remove .gz if compressed)
+                    if file_path.endswith('.gz'):
+                        local_filename = file_path[:-3]  # Remove .gz
+                    else:
+                        local_filename = file_path
+                    
+                    local_path = temp_dir / local_filename
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Decompress if needed
+                    if file_path.endswith('.gz'):
+                        data = gzip.decompress(data)
+                    
+                    # Save to temp directory
+                    with open(local_path, 'wb') as f:
+                        f.write(data)
+                    
+                    downloaded += 1
+                except Exception as e:
+                    # Track failed files
+                    failed_files.append((file_path, str(e)))
+                    continue
         
         if downloaded > 0:
             if failed_files:
