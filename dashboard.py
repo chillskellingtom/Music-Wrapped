@@ -146,63 +146,63 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         temp_dir = Path(tempfile.mkdtemp(prefix="apple_music_"))
         temp_dir.mkdir(exist_ok=True)
         
-        # List files in bucket
+        # Try to list files first (may fail due to RLS)
+        files = []
         try:
             files = supabase.storage.from_(bucket_name).list()
-        except Exception as e:
-            error_msg = str(e)
-            if "403" in error_msg or "Unauthorized" in error_msg:
-                st.error(f"❌ **Access Denied**: Could not access bucket '{bucket_name}'. Check RLS policies in Supabase.")
-            elif "404" in error_msg or "not found" in error_msg.lower():
-                st.error(f"❌ **Bucket Not Found**: Bucket '{bucket_name}' doesn't exist. Check the bucket name in secrets.")
-            else:
-                st.error(f"❌ **Storage Error**: {error_msg}")
-            return None
-        
-        # Handle different response formats
-        # Supabase list() can return a list directly or wrapped in a response object
-        if files is None:
-            files = []
-        elif not isinstance(files, list):
-            # If it's not a list, try to extract files from response
-            if hasattr(files, 'data'):
-                files = files.data
-            elif hasattr(files, '__iter__'):
-                files = list(files)
-            else:
+            if files is None:
                 files = []
+            elif not isinstance(files, list):
+                if hasattr(files, 'data'):
+                    files = files.data
+                elif hasattr(files, '__iter__'):
+                    files = list(files)
+                else:
+                    files = []
+        except Exception as e:
+            # List might fail due to RLS, but we can still try direct downloads
+            pass
         
         # Debug: Show raw response structure
         with st.sidebar.expander("🔍 Debug: Storage Response", expanded=False):
             st.json({"files_count": len(files), "files_type": type(files).__name__, "first_item": files[0] if files else None})
         
-        if not files or len(files) == 0:
-            st.warning(f"⚠️ Bucket '{bucket_name}' is empty. Upload files to Supabase Storage first.")
-            return None
+        # Known file names that we expect (in order of importance)
+        expected_files = [
+            "Apple Music Play Activity.csv.gz",  # Compressed main file
+            "Apple Music Play Activity.csv",  # Uncompressed (if uploaded that way)
+            "Apple Music - Play History Daily Tracks.csv",
+            "Apple Music - Track Play History.csv",
+            "Apple Music Library Tracks.json",
+            "Apple Music Library Artists.json",
+            "Apple Music - Top Content.csv",
+        ]
         
-        # Extract file names - handle different response formats
-        file_names = []
-        for item in files:
-            if isinstance(item, dict):
-                # Standard format: {"name": "...", ...}
-                name = item.get("name")
-            elif isinstance(item, str):
-                # Sometimes just returns list of strings
-                name = item
-            elif hasattr(item, "name"):
-                # Object with name attribute
-                name = item.name
-            else:
-                continue
+        # If list() returned files, use those; otherwise try expected files
+        if files and len(files) > 0:
+            # Extract file names from list response
+            file_names = []
+            for item in files:
+                if isinstance(item, dict):
+                    name = item.get("name")
+                elif isinstance(item, str):
+                    name = item
+                elif hasattr(item, "name"):
+                    name = item.name
+                else:
+                    continue
+                if name:
+                    file_names.append(name)
             
-            if name:
-                file_names.append(name)
-        
-        if file_names:
-            st.info(f"📦 Found {len(file_names)} file(s) in bucket: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
+            if file_names:
+                st.info(f"📦 Found {len(file_names)} file(s) via list: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
+                files_to_download = file_names
+            else:
+                files_to_download = expected_files
         else:
-            st.warning(f"⚠️ Could not parse file list from bucket. Response format: {type(files)}")
-            return None
+            # List() returned empty - RLS might block listing but allow direct access
+            st.info("📦 List returned empty (RLS may block listing). Trying direct file access...")
+            files_to_download = expected_files
         
         # Download each file
         downloaded = 0
@@ -210,21 +210,10 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         import gzip
         
         with st.spinner("📥 Downloading data from secure storage..."):
-            for file_info in files:
-                # Extract file name from different response formats
-                if isinstance(file_info, dict):
-                    file_path = file_info.get("name")
-                elif isinstance(file_info, str):
-                    file_path = file_info
-                elif hasattr(file_info, "name"):
-                    file_path = file_info.name
-                else:
-                    continue
-                
-                if file_path:
-                    try:
-                        # Download file
-                        data = supabase.storage.from_(bucket_name).download(file_path)
+            for file_path in files_to_download:
+                try:
+                    # Download file (will fail silently if file doesn't exist)
+                    data = supabase.storage.from_(bucket_name).download(file_path)
                         
                         # Determine local filename (remove .gz if compressed)
                         if file_path.endswith('.gz'):
