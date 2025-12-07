@@ -58,6 +58,11 @@ import tempfile
 from typing import Optional
 import requests
 import gzip
+import logging
+
+# Set up logging for download operations
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Import the Apple Music parser from this project
 from apple_music_parser import AppleMusicParser
@@ -217,8 +222,8 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         
         files = unique_files if unique_files else files
         
-        # Debug: Show raw response structure
-        with st.sidebar.expander("🔍 Debug: Storage Response", expanded=False):
+        # Debug: Log response structure (only in debug mode)
+        if logger.level == logging.DEBUG:
             file_names_debug = []
             for item in files:
                 if isinstance(item, dict):
@@ -228,12 +233,7 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                 elif hasattr(item, "name"):
                     file_names_debug.append(item.name)
             
-            st.json({
-                "files_count": len(files), 
-                "files_type": type(files).__name__, 
-                "file_names": file_names_debug,
-                "first_item": files[0] if files else None
-            })
+            logger.debug(f"Storage list response: {len(files)} files, type: {type(files).__name__}, names: {file_names_debug}")
         
         # Known file names that we expect (in order of importance)
         # Note: Some files may be optional
@@ -264,27 +264,25 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                     file_names.append(name)
             
             if file_names:
-                st.info(f"📦 Found {len(file_names)} file(s) via list: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
+                logger.info(f"Found {len(file_names)} file(s) via list: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
                 files_to_download = file_names
             else:
                 files_to_download = expected_files
         else:
             # List() returned empty - RLS might block listing but allow direct access
-            st.info("📦 List returned empty (RLS may block listing). Trying direct file access...")
+            logger.info("List returned empty (RLS may block listing). Trying direct file access...")
             files_to_download = expected_files
         
         # Download each file
         downloaded = 0
         failed_files = []
         
-        with st.spinner("📥 Downloading data from secure storage..."):
-            progress_bar = st.progress(0)
+        with st.spinner("📥 Loading data from secure storage..."):
             total_files = len(files_to_download)
+            logger.info(f"Starting download of {total_files} file(s) from Supabase Storage")
             
             for idx, file_path in enumerate(files_to_download):
-                progress_bar.progress((idx + 1) / total_files)
-                status_text = st.empty()
-                status_text.text(f"Downloading {file_path}... ({idx + 1}/{total_files})")
+                logger.info(f"Downloading {file_path}... ({idx + 1}/{total_files})")
                 
                 try:
                     # Try direct download first
@@ -346,28 +344,30 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                         f.write(data)
                     
                     downloaded += 1
-                    status_text.success(f"✅ Downloaded: {local_filename}")
+                    logger.info(f"✅ Successfully downloaded: {local_filename}")
                 except Exception as e:
                     error_str = str(e)
                     # Only track as failed if it's not a 404 (file doesn't exist)
                     # 404s for optional files are OK
                     if "404" not in error_str and "not found" not in error_str.lower():
                         failed_files.append((file_path, error_str))
-                    # For 404s, just skip (file might be optional)
-                    status_text.empty()
+                        logger.warning(f"⚠️ Failed to download {file_path}: {error_str}")
+                    else:
+                        logger.debug(f"Skipping optional file {file_path} (not found)")
                     continue
             
-            # Clear progress indicators
-            progress_bar.empty()
+            logger.info(f"Download complete: {downloaded} file(s) downloaded, {len(failed_files)} failed")
         
         if downloaded > 0:
             if failed_files:
-                st.warning(f"⚠️ Downloaded {downloaded} file(s), but {len(failed_files)} failed. Check RLS policies.")
+                logger.warning(f"Downloaded {downloaded} file(s), but {len(failed_files)} failed. Check RLS policies.")
+            logger.info(f"Successfully loaded data from Supabase Storage ({downloaded} files)")
             return str(temp_dir)
         else:
             if failed_files:
                 error_details = "\n".join([f"  - {name}: {err}" for name, err in failed_files[:3]])
-                st.error(f"❌ **Download Failed**: Could not download any files.\n{error_details}")
+                logger.error(f"Download failed: Could not download any files.\n{error_details}")
+                st.error("❌ **Could not load data from storage**. Check logs for details.")
                 st.markdown("""
                 **Troubleshooting:**
                 1. Go to [Supabase Storage](https://supabase.com/dashboard/project/cgmiuzcjowdtaawtdmrg/storage/buckets/apple-music-data)
@@ -375,6 +375,8 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                 3. Ensure files are in the root of the bucket (not in subfolders)
                 4. Check that file names match exactly (case-sensitive, including spaces)
                 """)
+            else:
+                logger.warning("No files found in Supabase Storage")
             return None
             
     except Exception as e:
