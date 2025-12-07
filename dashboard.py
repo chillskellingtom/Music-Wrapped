@@ -159,14 +159,50 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
                 st.error(f"❌ **Storage Error**: {error_msg}")
             return None
         
-        if not files:
+        # Handle different response formats
+        # Supabase list() can return a list directly or wrapped in a response object
+        if files is None:
+            files = []
+        elif not isinstance(files, list):
+            # If it's not a list, try to extract files from response
+            if hasattr(files, 'data'):
+                files = files.data
+            elif hasattr(files, '__iter__'):
+                files = list(files)
+            else:
+                files = []
+        
+        # Debug: Show raw response structure
+        with st.sidebar.expander("🔍 Debug: Storage Response", expanded=False):
+            st.json({"files_count": len(files), "files_type": type(files).__name__, "first_item": files[0] if files else None})
+        
+        if not files or len(files) == 0:
             st.warning(f"⚠️ Bucket '{bucket_name}' is empty. Upload files to Supabase Storage first.")
             return None
         
-        # Debug: Show what files were found
-        file_names = [f.get("name", "unknown") for f in files if f.get("name")]
+        # Extract file names - handle different response formats
+        file_names = []
+        for item in files:
+            if isinstance(item, dict):
+                # Standard format: {"name": "...", ...}
+                name = item.get("name")
+            elif isinstance(item, str):
+                # Sometimes just returns list of strings
+                name = item
+            elif hasattr(item, "name"):
+                # Object with name attribute
+                name = item.name
+            else:
+                continue
+            
+            if name:
+                file_names.append(name)
+        
         if file_names:
             st.info(f"📦 Found {len(file_names)} file(s) in bucket: {', '.join(file_names[:3])}{'...' if len(file_names) > 3 else ''}")
+        else:
+            st.warning(f"⚠️ Could not parse file list from bucket. Response format: {type(files)}")
+            return None
         
         # Download each file
         downloaded = 0
@@ -175,8 +211,17 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         
         with st.spinner("📥 Downloading data from secure storage..."):
             for file_info in files:
-                if file_info.get("name"):
-                    file_path = file_info["name"]
+                # Extract file name from different response formats
+                if isinstance(file_info, dict):
+                    file_path = file_info.get("name")
+                elif isinstance(file_info, str):
+                    file_path = file_info
+                elif hasattr(file_info, "name"):
+                    file_path = file_info.name
+                else:
+                    continue
+                
+                if file_path:
                     try:
                         # Download file
                         data = supabase.storage.from_(bucket_name).download(file_path)
