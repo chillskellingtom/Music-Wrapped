@@ -490,13 +490,26 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     # Rename columns for clarity - try multiple artist column names
     if artist_col and artist_col in song_stats.columns:
         song_stats = song_stats.rename(columns={artist_col: 'Artist'})
+        # Check if artist data is actually populated (not all empty)
+        non_empty = (song_stats['Artist'].astype(str).str.strip() != '').sum()
+        if non_empty < len(song_stats) * 0.1:  # Less than 10% populated
+            logger.warning(f"Artist column '{artist_col}' from play_activity has mostly empty values ({non_empty}/{len(song_stats)}). Using enriched sources instead.")
+            song_stats['Artist'] = 'Unknown'  # Reset to Unknown so fallback works
+        else:
+            # Fill empty values but keep what we have
+            song_stats['Artist'] = song_stats['Artist'].fillna('').astype(str).replace('nan', '').replace('None', '')
     else:
         # Try to get artist from other sources
         song_stats['Artist'] = 'Unknown'
-        
-        # Try to get from daily tracks or track history
-        # Check for various artist column names
-        artist_cols_to_try = ['Artist Name', 'Artist', 'Container Artist Name', 'Media Item Artist Name']
+    
+    # Always try to enrich from daily_tracks and track_history (even if we got some from play_activity)
+    artist_cols_to_try = ['Artist Name', 'Artist', 'Container Artist Name', 'Media Item Artist Name']
+    
+    # Check if we need to enrich (Artist is Unknown or empty)
+    needs_enrichment = (song_stats['Artist'] == 'Unknown') | (song_stats['Artist'].astype(str).str.strip() == '')
+    
+    if needs_enrichment.any():
+        logger.info(f"Enriching {needs_enrichment.sum()}/{len(song_stats)} songs with artist data from enriched sources")
         
         if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
             # Find which artist column exists
@@ -507,13 +520,20 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
                     break
             
             if artist_col:
-                logger.info(f"Using '{artist_col}' from daily_tracks for artist data")
-                artist_map = _parser.daily_tracks.set_index('Song Name')[artist_col].to_dict()
-                # Normalize for matching
-                normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and v != ''}
-                song_stats['Artist'] = song_stats['Song Name'].str.lower().str.strip().map(normalized_map).fillna('Unknown')
+                logger.info(f"Using '{artist_col}' from daily_tracks for artist enrichment")
+                # Create mapping, filtering out empty values
+                artist_data = _parser.daily_tracks[['Song Name', artist_col]].dropna(subset=[artist_col])
+                artist_data = artist_data[artist_data[artist_col].astype(str).str.strip() != '']
+                if not artist_data.empty:
+                    artist_map = artist_data.set_index('Song Name')[artist_col].to_dict()
+                    # Normalize for matching
+                    normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                    # Only update songs that need enrichment
+                    mask = needs_enrichment
+                    song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map).fillna(song_stats.loc[mask, 'Artist'])
+                    needs_enrichment = (song_stats['Artist'] == 'Unknown') | (song_stats['Artist'].astype(str).str.strip() == '')
         
-        if _parser.track_history is not None and not _parser.track_history.empty:
+        if needs_enrichment.any() and _parser.track_history is not None and not _parser.track_history.empty:
             # Also try track history
             artist_col = None
             for col in artist_cols_to_try:
@@ -523,24 +543,67 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
             
             if artist_col:
                 logger.info(f"Using '{artist_col}' from track_history for remaining artist data")
-                artist_map = _parser.track_history.set_index('Song Name')[artist_col].to_dict()
-                # Normalize for matching
-                normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and v != ''}
-                # Only update if still Unknown
-                mask = song_stats['Artist'] == 'Unknown'
-                song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map).fillna('Unknown')
+                # Create mapping, filtering out empty values
+                artist_data = _parser.track_history[['Song Name', artist_col]].dropna(subset=[artist_col])
+                artist_data = artist_data[artist_data[artist_col].astype(str).str.strip() != '']
+                if not artist_data.empty:
+                    artist_map = artist_data.set_index('Song Name')[artist_col].to_dict()
+                    # Normalize for matching
+                    normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                    # Only update songs that still need enrichment
+                    mask = needs_enrichment
+                    song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map).fillna(song_stats.loc[mask, 'Artist'])
     
     if 'Album Name' in song_stats.columns:
         song_stats = song_stats.rename(columns={'Album Name': 'Album'})
+        # Check if album data is actually populated
+        non_empty = (song_stats['Album'].astype(str).str.strip() != '').sum()
+        if non_empty < len(song_stats) * 0.1:  # Less than 10% populated
+            logger.warning(f"Album column from play_activity has mostly empty values ({non_empty}/{len(song_stats)}). Using enriched sources instead.")
+            song_stats['Album'] = ''  # Reset to empty so enrichment works
     else:
         song_stats['Album'] = ''
+    
+    # Enrich album data from daily_tracks if available
+    if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
+        if 'Album Name' in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
+            album_data = _parser.daily_tracks[['Song Name', 'Album Name']].dropna(subset=['Album Name'])
+            album_data = album_data[album_data['Album Name'].astype(str).str.strip() != '']
+            if not album_data.empty:
+                album_map = album_data.set_index('Song Name')['Album Name'].to_dict()
+                normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in album_map.items() if pd.notna(v) and str(v).strip() != ''}
+                # Only update empty albums
+                mask = (song_stats['Album'].astype(str).str.strip() == '')
+                song_stats.loc[mask, 'Album'] = song_stats.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map).fillna('')
+    
+    # Final cleanup: replace any remaining empty/unknown values
+    song_stats['Artist'] = song_stats['Artist'].astype(str).replace('nan', 'Unknown').replace('None', 'Unknown').replace('', 'Unknown')
     
     # Ensure all text columns are strings (not categorical)
     for col in ['Song Name', 'Artist', 'Album']:
         if col in song_stats.columns:
             song_stats[col] = song_stats[col].astype(str).replace('nan', '').replace('None', '')
+            if col == 'Artist':
+                song_stats[col] = song_stats[col].replace('', 'Unknown')  # Keep Unknown for empty artists
     
-    # Try to get genre from library tracks
+    # Initialize genre column
+    if 'Genre' not in song_stats.columns:
+        song_stats['Genre'] = 'Unknown'
+    
+    # First, try to get genre from enriched daily_tracks (has Genre from identifier mapping)
+    if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
+        if 'Genre' in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
+            genre_data = _parser.daily_tracks[['Song Name', 'Genre']].dropna(subset=['Genre'])
+            genre_data = genre_data[genre_data['Genre'].astype(str).str.strip() != '']
+            if not genre_data.empty:
+                genre_map = genre_data.set_index('Song Name')['Genre'].to_dict()
+                normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in genre_map.items() if pd.notna(v) and str(v).strip() != ''}
+                # Only update Unknown genres
+                mask = song_stats['Genre'] == 'Unknown'
+                song_stats.loc[mask, 'Genre'] = song_stats.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map).fillna('Unknown')
+                logger.info(f"Enriched {mask.sum()} genres from daily_tracks")
+    
+    # Then, try to get genre from library tracks (fallback for remaining Unknown)
     # Create a more robust mapping using both song name and artist
     genre_map_by_name = {}
     genre_map_by_artist_song = {}
@@ -584,8 +647,13 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     else:
         logger.warning("No library_tracks available for genre mapping")
     
-    # Try to match genres
+    # Try to match genres (only for Unknown genres)
     def get_genre(row):
+        # If we already have a genre from daily_tracks, keep it
+        current_genre = str(row.get('Genre', 'Unknown')).strip()
+        if current_genre and current_genre != 'Unknown':
+            return current_genre
+        
         song_name = str(row['Song Name']).strip()
         artist = str(row.get('Artist', '')).strip()
         
@@ -606,7 +674,10 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
         
         return 'Unknown'
     
-    song_stats['Genre'] = song_stats.apply(get_genre, axis=1)
+    # Only update Unknown genres
+    mask = song_stats['Genre'] == 'Unknown'
+    if mask.any():
+        song_stats.loc[mask, 'Genre'] = song_stats.loc[mask].apply(get_genre, axis=1)
     
     # Log summary
     artists_found = (song_stats['Artist'] != 'Unknown').sum() if 'Artist' in song_stats.columns else 0
@@ -1335,9 +1406,11 @@ def main():
                         logger.info(f"Using '{col}' from track_history for artist enrichment")
                         artist_map = apple_parser.track_history.set_index('Song Name')[col].dropna().to_dict()
                         # Normalize for matching
-                        normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                        normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
                         mask = songs_df['Artist Name'].isna() | (songs_df['Artist Name'].astype(str).str.strip() == '')
-                        songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map)
+                        if mask.any():
+                            mapped_values = songs_df.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map)
+                            songs_df.loc[mask, 'Artist Name'] = mapped_values.astype(str)
                         break
             
             # Try daily tracks if still missing
@@ -1347,13 +1420,15 @@ def main():
                     if col in apple_parser.daily_tracks.columns and 'Song Name' in apple_parser.daily_tracks.columns:
                         logger.info(f"Using '{col}' from daily_tracks for remaining artist data")
                         artist_map = apple_parser.daily_tracks.set_index('Song Name')[col].dropna().to_dict()
-                        normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                        normalized_map = {str(k).lower().strip(): str(v).strip() for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
                         mask = songs_df['Artist Name'].isna() | (songs_df['Artist Name'].astype(str).str.strip() == '')
-                        songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map)
+                        if mask.any():
+                            mapped_values = songs_df.loc[mask, 'Song Name'].astype(str).str.lower().str.strip().map(normalized_map)
+                            songs_df.loc[mask, 'Artist Name'] = mapped_values.astype(str)
                         break
             
-            # Fill remaining with Unknown
-            songs_df['Artist Name'] = songs_df['Artist Name'].fillna('Unknown')
+            # Fill remaining with Unknown and ensure string type
+            songs_df['Artist Name'] = songs_df['Artist Name'].fillna('Unknown').astype(str)
             songs_df['Artist Name'] = songs_df['Artist Name'].replace('', 'Unknown')
             
             logger.info(f"After enrichment: {songs_df['Artist Name'].notna().sum()}/{len(songs_df)} songs have artist info")
