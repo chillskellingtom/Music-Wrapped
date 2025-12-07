@@ -1312,23 +1312,51 @@ def main():
         songs_df = apple_parser.get_top_songs(num_songs, year_filter)
         
         # Enrich with artist data from other sources if missing
-        if 'Artist Name' not in songs_df.columns or songs_df['Artist Name'].isna().all():
+        needs_enrichment = (
+            'Artist Name' not in songs_df.columns or 
+            songs_df['Artist Name'].isna().all() or 
+            (songs_df['Artist Name'].astype(str).str.strip() == '').all()
+        )
+        
+        if needs_enrichment:
             logger.info("Artist Name missing in top songs, trying to enrich from other sources")
-            # Try to get from daily tracks
-            if apple_parser.daily_tracks is not None and not apple_parser.daily_tracks.empty:
-                if 'Artist Name' in apple_parser.daily_tracks.columns and 'Song Name' in apple_parser.daily_tracks.columns:
-                    artist_map = apple_parser.daily_tracks.set_index('Song Name')['Artist Name'].to_dict()
-                    songs_df['Artist Name'] = songs_df['Song Name'].map(artist_map)
             
-            # Try track history if still missing
-            if songs_df['Artist Name'].isna().any() and apple_parser.track_history is not None and not apple_parser.track_history.empty:
-                if 'Artist Name' in apple_parser.track_history.columns and 'Song Name' in apple_parser.track_history.columns:
-                    artist_map = apple_parser.track_history.set_index('Song Name')['Artist Name'].to_dict()
-                    mask = songs_df['Artist Name'].isna()
-                    songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].map(artist_map)
+            # Initialize Artist Name column if missing
+            if 'Artist Name' not in songs_df.columns:
+                songs_df['Artist Name'] = None
+            
+            # Try to get from track history first (most reliable)
+            if apple_parser.track_history is not None and not apple_parser.track_history.empty:
+                logger.info(f"track_history columns: {apple_parser.track_history.columns.tolist()}")
+                # Try multiple artist column names
+                artist_cols = ['Artist Name', 'Artist', 'Container Artist Name']
+                for col in artist_cols:
+                    if col in apple_parser.track_history.columns and 'Song Name' in apple_parser.track_history.columns:
+                        logger.info(f"Using '{col}' from track_history for artist enrichment")
+                        artist_map = apple_parser.track_history.set_index('Song Name')[col].dropna().to_dict()
+                        # Normalize for matching
+                        normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                        mask = songs_df['Artist Name'].isna() | (songs_df['Artist Name'].astype(str).str.strip() == '')
+                        songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map)
+                        break
+            
+            # Try daily tracks if still missing
+            if (songs_df['Artist Name'].isna().any() or (songs_df['Artist Name'].astype(str).str.strip() == '').any()) and apple_parser.daily_tracks is not None and not apple_parser.daily_tracks.empty:
+                artist_cols = ['Artist Name', 'Artist', 'Container Artist Name']
+                for col in artist_cols:
+                    if col in apple_parser.daily_tracks.columns and 'Song Name' in apple_parser.daily_tracks.columns:
+                        logger.info(f"Using '{col}' from daily_tracks for remaining artist data")
+                        artist_map = apple_parser.daily_tracks.set_index('Song Name')[col].dropna().to_dict()
+                        normalized_map = {k.lower().strip(): v for k, v in artist_map.items() if pd.notna(v) and str(v).strip() != ''}
+                        mask = songs_df['Artist Name'].isna() | (songs_df['Artist Name'].astype(str).str.strip() == '')
+                        songs_df.loc[mask, 'Artist Name'] = songs_df.loc[mask, 'Song Name'].str.lower().str.strip().map(normalized_map)
+                        break
             
             # Fill remaining with Unknown
             songs_df['Artist Name'] = songs_df['Artist Name'].fillna('Unknown')
+            songs_df['Artist Name'] = songs_df['Artist Name'].replace('', 'Unknown')
+            
+            logger.info(f"After enrichment: {songs_df['Artist Name'].notna().sum()}/{len(songs_df)} songs have artist info")
         
         render_top_songs_chart(songs_df, num_songs)
         
