@@ -458,6 +458,10 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
         'Play Duration Milliseconds': 'sum'
     }
     
+    # Include Track Identifier if available (for direct genre matching)
+    if 'Track Identifier' in df.columns:
+        agg_dict['Track Identifier'] = 'first'  # Take first Track Identifier for each song
+    
     # Include album if available
     if 'Album Name' in df.columns:
         agg_dict['Album Name'] = 'first'
@@ -590,7 +594,41 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     if 'Genre' not in song_stats.columns:
         song_stats['Genre'] = 'Unknown'
     
-    # First, try to get genre from enriched daily_tracks (has Genre from identifier mapping)
+    # PRIORITY 1: Use Track Identifier from play_activity to directly match library_tracks for genre
+    # This is the most reliable method since it uses the exact track ID
+    if 'Track Identifier' in song_stats.columns and _parser.library_tracks:
+        logger.info("Using Track Identifier from play_activity to match genres from library_tracks")
+        # Build Track Identifier to Genre map from library_tracks
+        track_id_to_genre = {}
+        for track in _parser.library_tracks:
+            track_id = track.get('Track Identifier')
+            genre = track.get('Genre', '')
+            if track_id and genre and str(genre).strip():
+                try:
+                    track_id_to_genre[int(track_id)] = str(genre).strip()
+                except (ValueError, TypeError):
+                    pass
+        
+        if track_id_to_genre:
+            logger.info(f"Built Track Identifier genre map with {len(track_id_to_genre)} entries")
+            # Directly map Track Identifier to Genre
+            mask = song_stats['Genre'] == 'Unknown'
+            track_ids = song_stats.loc[mask, 'Track Identifier'].dropna()
+            if not track_ids.empty:
+                enriched_count = 0
+                for idx in track_ids.index:
+                    track_id = song_stats.at[idx, 'Track Identifier']
+                    if pd.notna(track_id):
+                        try:
+                            track_id_int = int(track_id)
+                            if track_id_int in track_id_to_genre:
+                                song_stats.at[idx, 'Genre'] = track_id_to_genre[track_id_int]
+                                enriched_count += 1
+                        except (ValueError, TypeError):
+                            pass
+                logger.info(f"Enriched {enriched_count} genres using Track Identifier mapping")
+    
+    # PRIORITY 2: Try to get genre from enriched daily_tracks (has Genre from identifier mapping)
     if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
         if 'Genre' in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
             genre_data = _parser.daily_tracks[['Song Name', 'Genre']].dropna(subset=['Genre'])
@@ -689,6 +727,10 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     if logger.level == logging.DEBUG and not song_stats.empty:
         sample = song_stats.head(5)[['Song Name', 'Artist', 'Genre']].to_dict('records')
         logger.debug(f"Sample data: {sample}")
+    
+    # Clean up: Remove Track Identifier column (internal use only)
+    if 'Track Identifier' in song_stats.columns:
+        song_stats = song_stats.drop(columns=['Track Identifier'])
     
     # Sort by plays
     song_stats = song_stats.sort_values('Plays', ascending=False)
