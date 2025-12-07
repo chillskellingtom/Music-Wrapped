@@ -89,18 +89,129 @@ class AppleMusicParser:
             self._play_activity = self._load_csv("Apple Music Play Activity.csv")
         return self._play_activity
     
+    def _build_track_identifier_map(self) -> Dict[int, Dict]:
+        """
+        Build a mapping from Track Identifier to full track metadata.
+        
+        Returns:
+            Dictionary mapping track identifier (int) to metadata dict
+        """
+        if not hasattr(self, '_track_id_map'):
+            self._track_id_map = {}
+            
+            if self.library_tracks:
+                for track in self.library_tracks:
+                    track_id = track.get('Track Identifier')
+                    if track_id:
+                        self._track_id_map[int(track_id)] = {
+                            'Title': track.get('Title', ''),
+                            'Artist': track.get('Artist', ''),
+                            'Album': track.get('Album', ''),
+                            'Genre': track.get('Genre', ''),
+                            'Album Artist': track.get('Album Artist', ''),
+                        }
+        
+        return self._track_id_map
+    
+    def _parse_track_description(self, description: str) -> Tuple[str, str]:
+        """
+        Parse "Artist - Song" format from Track Description.
+        
+        Args:
+            description: Track Description string like "Regurgitator - I Will Lick Your Arsehole"
+        
+        Returns:
+            Tuple of (artist, song_name)
+        """
+        if not description or pd.isna(description):
+            return '', ''
+        
+        description = str(description).strip()
+        if ' - ' in description:
+            parts = description.split(' - ', 1)
+            if len(parts) == 2:
+                return parts[0].strip(), parts[1].strip()
+        
+        return '', description
+    
     @property
     def daily_tracks(self) -> Optional[pd.DataFrame]:
-        """Lazy load and return daily tracks data."""
+        """Lazy load and return daily tracks data, enriched with metadata."""
         if self._daily_tracks is None:
-            self._daily_tracks = self._load_csv("Apple Music - Play History Daily Tracks.csv")
+            df = self._load_csv("Apple Music - Play History Daily Tracks.csv")
+            if df is not None and not df.empty:
+                # Enrich with metadata from Library Tracks
+                track_id_map = self._build_track_identifier_map()
+                
+                # Add columns if they don't exist
+                if 'Song Name' not in df.columns:
+                    df['Song Name'] = ''
+                if 'Artist Name' not in df.columns:
+                    df['Artist Name'] = ''
+                if 'Album Name' not in df.columns:
+                    df['Album Name'] = ''
+                if 'Genre' not in df.columns:
+                    df['Genre'] = ''
+                
+                # Enrich using Track Identifier
+                if 'Track Identifier' in df.columns:
+                    for idx, row in df.iterrows():
+                        track_id = row.get('Track Identifier')
+                        if pd.notna(track_id) and int(track_id) in track_id_map:
+                            metadata = track_id_map[int(track_id)]
+                            if not df.at[idx, 'Song Name']:
+                                df.at[idx, 'Song Name'] = metadata.get('Title', '')
+                            if not df.at[idx, 'Artist Name']:
+                                df.at[idx, 'Artist Name'] = metadata.get('Artist', '') or metadata.get('Album Artist', '')
+                            if not df.at[idx, 'Album Name']:
+                                df.at[idx, 'Album Name'] = metadata.get('Album', '')
+                            if not df.at[idx, 'Genre']:
+                                df.at[idx, 'Genre'] = metadata.get('Genre', '')
+                
+                # Fallback: Parse Track Description if metadata still missing
+                if 'Track Description' in df.columns:
+                    for idx, row in df.iterrows():
+                        # Only parse if we don't have the data yet
+                        if not df.at[idx, 'Song Name'] or not df.at[idx, 'Artist Name']:
+                            description = row.get('Track Description', '')
+                            if pd.notna(description) and description:
+                                artist, song = self._parse_track_description(description)
+                                if artist and not df.at[idx, 'Artist Name']:
+                                    df.at[idx, 'Artist Name'] = artist
+                                if song and not df.at[idx, 'Song Name']:
+                                    df.at[idx, 'Song Name'] = song
+                
+                self._daily_tracks = df
+            else:
+                self._daily_tracks = df
         return self._daily_tracks
     
     @property
     def track_history(self) -> Optional[pd.DataFrame]:
-        """Lazy load and return track play history."""
+        """Lazy load and return track play history, enriched with metadata."""
         if self._track_history is None:
-            self._track_history = self._load_csv("Apple Music - Track Play History.csv")
+            df = self._load_csv("Apple Music - Track Play History.csv")
+            if df is not None and not df.empty:
+                # Add columns if they don't exist
+                if 'Song Name' not in df.columns:
+                    df['Song Name'] = ''
+                if 'Artist Name' not in df.columns:
+                    df['Artist Name'] = ''
+                
+                # Parse Track Name (format: "Artist - Song" or "Artist, Feature - Song")
+                if 'Track Name' in df.columns:
+                    for idx, row in df.iterrows():
+                        track_name = row.get('Track Name', '')
+                        if pd.notna(track_name) and track_name:
+                            artist, song = self._parse_track_description(track_name)
+                            if artist:
+                                df.at[idx, 'Artist Name'] = artist
+                            if song:
+                                df.at[idx, 'Song Name'] = song
+                
+                self._track_history = df
+            else:
+                self._track_history = df
         return self._track_history
     
     @property
