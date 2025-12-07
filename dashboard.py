@@ -462,9 +462,20 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     if 'Album Name' in df.columns:
         agg_dict['Album Name'] = 'first'
     
-    # Include artist if available
-    if 'Container Artist Name' in df.columns:
-        agg_dict['Container Artist Name'] = 'first'
+    # Include artist if available - try multiple column names
+    artist_col = None
+    available_cols = df.columns.tolist()
+    logger.debug(f"Available columns in play_activity: {available_cols}")
+    
+    for col_name in ['Container Artist Name', 'Artist Name', 'Artist', 'Media Item Artist Name']:
+        if col_name in df.columns:
+            artist_col = col_name
+            agg_dict[col_name] = 'first'
+            logger.info(f"Using '{col_name}' column for artist data")
+            break
+    
+    if not artist_col:
+        logger.warning("No artist column found in play_activity. Will try to get from other sources.")
     
     song_stats = df.groupby('Song Name').agg(agg_dict).rename(columns={
         'Song Name': 'Plays',
@@ -476,11 +487,27 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     # Add duration in minutes
     song_stats['Duration (min)'] = (song_stats['Total Duration (ms)'] / 60000).round(1)
     
-    # Rename columns for clarity
-    if 'Container Artist Name' in song_stats.columns:
-        song_stats = song_stats.rename(columns={'Container Artist Name': 'Artist'})
+    # Rename columns for clarity - try multiple artist column names
+    if artist_col and artist_col in song_stats.columns:
+        song_stats = song_stats.rename(columns={artist_col: 'Artist'})
     else:
+        # Try to get artist from other sources
         song_stats['Artist'] = 'Unknown'
+        
+        # Try to get from daily tracks or track history
+        if _parser.daily_tracks is not None and not _parser.daily_tracks.empty:
+            # Map artists from daily tracks
+            if 'Artist Name' in _parser.daily_tracks.columns and 'Song Name' in _parser.daily_tracks.columns:
+                artist_map = _parser.daily_tracks.set_index('Song Name')['Artist Name'].to_dict()
+                song_stats['Artist'] = song_stats['Song Name'].map(artist_map).fillna('Unknown')
+        
+        if _parser.track_history is not None and not _parser.track_history.empty:
+            # Also try track history
+            if 'Artist Name' in _parser.track_history.columns and 'Song Name' in _parser.track_history.columns:
+                artist_map = _parser.track_history.set_index('Song Name')['Artist Name'].to_dict()
+                # Only update if still Unknown
+                mask = song_stats['Artist'] == 'Unknown'
+                song_stats.loc[mask, 'Artist'] = song_stats.loc[mask, 'Song Name'].map(artist_map).fillna('Unknown')
     
     if 'Album Name' in song_stats.columns:
         song_stats = song_stats.rename(columns={'Album Name': 'Album'})
@@ -493,15 +520,54 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
             song_stats[col] = song_stats[col].astype(str).replace('nan', '').replace('None', '')
     
     # Try to get genre from library tracks
-    genre_map = {}
+    # Create a more robust mapping using both song name and artist
+    genre_map_by_name = {}
+    genre_map_by_artist_song = {}
+    
     if _parser.library_tracks:
+        logger.info(f"Loading genres from {len(_parser.library_tracks)} library tracks")
         for track in _parser.library_tracks:
             track_name = track.get('Title', track.get('Name', ''))
+            artist = track.get('Artist', track.get('Artist Name', ''))
             genre = track.get('Genre', '')
+            
             if track_name and genre:
-                genre_map[track_name] = genre
+                # Map by song name
+                genre_map_by_name[track_name.lower()] = genre
+                
+                # Also map by artist + song for better matching
+                if artist:
+                    key = f"{artist.lower()}|{track_name.lower()}"
+                    genre_map_by_artist_song[key] = genre
+        
+        logger.info(f"Created genre maps: {len(genre_map_by_name)} by name, {len(genre_map_by_artist_song)} by artist+song")
+    else:
+        logger.warning("No library_tracks available for genre mapping")
     
-    song_stats['Genre'] = song_stats['Song Name'].map(genre_map).fillna('Unknown')
+    # Try to match genres
+    def get_genre(row):
+        song_name = str(row['Song Name']).lower()
+        artist = str(row.get('Artist', '')).lower()
+        
+        # First try exact song name match
+        if song_name in genre_map_by_name:
+            return genre_map_by_name[song_name]
+        
+        # Then try artist + song match
+        if artist and artist != 'unknown':
+            key = f"{artist}|{song_name}"
+            if key in genre_map_by_artist_song:
+                return genre_map_by_artist_song[key]
+        
+        return 'Unknown'
+    
+    song_stats['Genre'] = song_stats.apply(get_genre, axis=1)
+    
+    # Log summary
+    artists_found = (song_stats['Artist'] != 'Unknown').sum()
+    genres_found = (song_stats['Genre'] != 'Unknown').sum()
+    logger.info(f"Artist data: {artists_found}/{len(song_stats)} songs have artist info")
+    logger.info(f"Genre data: {genres_found}/{len(song_stats)} songs have genre info")
     
     # Sort by plays
     song_stats = song_stats.sort_values('Plays', ascending=False)
