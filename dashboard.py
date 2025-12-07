@@ -55,7 +55,7 @@ from datetime import datetime, timedelta
 import argparse
 import hashlib
 import tempfile
-from typing import Optional
+from typing import Optional, Dict
 import requests
 import gzip
 import logging
