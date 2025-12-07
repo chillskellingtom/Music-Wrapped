@@ -138,11 +138,30 @@ def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
         bucket_name = st.secrets.supabase.get("bucket_name", "apple-music-data")
     
     try:
-        # Create Supabase client
-        supabase = create_client(
-            st.secrets.supabase.url,
-            st.secrets.supabase.key
-        )
+        # Create Supabase client - use authenticated session token if available
+        # This ensures RLS policies work correctly for authenticated users
+        if "sb_session" in st.session_state and st.session_state.sb_session:
+            # Use authenticated user's access token instead of anon key
+            session = st.session_state.sb_session
+            access_token = getattr(session, 'access_token', None) or getattr(session, 'accessToken', None)
+            if access_token:
+                # Create client with user's access token
+                supabase = create_client(
+                    st.secrets.supabase.url,
+                    access_token  # Use access token instead of anon key
+                )
+            else:
+                # Fall back to anon key if no token
+                supabase = create_client(
+                    st.secrets.supabase.url,
+                    st.secrets.supabase.key
+                )
+        else:
+            # Fall back to anon key (may not work with RLS)
+            supabase = create_client(
+                st.secrets.supabase.url,
+                st.secrets.supabase.key
+            )
         
         # Create temp directory
         temp_dir = Path(tempfile.mkdtemp(prefix="apple_music_"))
