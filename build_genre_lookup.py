@@ -135,6 +135,8 @@ def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict, library_tracks:
         
         enriched_track_ids = 0
         enriched_song_artist = 0
+        matched_track_ids = 0
+        total_with_track_id = 0
         
         # Process daily tracks
         if 'Track Identifier' in df.columns:
@@ -144,16 +146,19 @@ def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict, library_tracks:
                 
                 # Try to get genre from Track Identifier
                 if pd.notna(track_id):
+                    total_with_track_id += 1
                     try:
                         track_id_int = int(track_id)
                         if track_id_int in track_id_to_genre:
+                            matched_track_ids += 1
                             genre = track_id_to_genre[track_id_int]
-                            # Add to track_id_map if not already there
+                            # Add to track_id_map if not already there (from library_tracks)
                             if str(track_id) not in track_id_map:
                                 track_id_map[str(track_id)] = genre
                                 enriched_track_ids += 1
                             
-                            # Also add to song+artist map if we can parse Track Description
+                            # Always try to add to song+artist map from Track Description
+                            # This creates mappings for tracks that might not be in library_tracks Song+Artist map
                             if pd.notna(track_desc) and ' - ' in str(track_desc):
                                 parts = str(track_desc).split(' - ', 1)
                                 if len(parts) == 2:
@@ -169,7 +174,7 @@ def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict, library_tracks:
                                     song_lower = song.lower().strip()
                                     if song_lower not in song_map:
                                         song_map[song_lower] = genre
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
                         pass
         
         # Update genre_lookup with new mappings
@@ -177,7 +182,9 @@ def enrich_from_daily_tracks(data_dir: Path, genre_lookup: Dict, library_tracks:
         genre_lookup['song_artist_to_genre'] = song_artist_map
         genre_lookup['song_to_genre'] = song_map
         
-        print(f"   ✅ Enriched {enriched_track_ids} Track ID mappings from daily_tracks")
+        print(f"   📊 Debug: {total_with_track_id} daily tracks have Track Identifier")
+        print(f"   📊 Debug: {matched_track_ids} Track Identifiers matched library_tracks")
+        print(f"   ✅ Enriched {enriched_track_ids} new Track ID mappings from daily_tracks")
         print(f"   ✅ Enriched {enriched_song_artist} Song+Artist mappings from daily_tracks")
         print(f"   ✅ Processed {len(df)} daily track records")
     except Exception as e:
