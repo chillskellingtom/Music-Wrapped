@@ -115,9 +115,12 @@ st.markdown("""
 # CACHING & DATA LOADING
 # ============================================================================
 @st.cache_data(ttl=3600)  # Cache for 1 hour
-def download_data_from_supabase(bucket_name: str = "apple-music-data") -> Optional[str]:
+def download_data_from_supabase(bucket_name: str = None) -> Optional[str]:
     """
     Download Apple Music data from Supabase Storage to a local temp directory.
+    
+    Args:
+        bucket_name: Name of the Supabase Storage bucket (defaults to "apple-music-data" or from secrets)
     
     Returns:
         Path to local data directory, or None if not available
@@ -127,6 +130,10 @@ def download_data_from_supabase(bucket_name: str = "apple-music-data") -> Option
     
     if "supabase" not in st.secrets:
         return None
+    
+    # Get bucket name from secrets or use default
+    if bucket_name is None:
+        bucket_name = st.secrets.supabase.get("bucket_name", "apple-music-data")
     
     try:
         # Create Supabase client
