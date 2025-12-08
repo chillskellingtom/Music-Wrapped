@@ -13,6 +13,57 @@ from collections import Counter
 from typing import Optional, Dict, List, Tuple, Set
 import re
 
+# Timezone configuration - NSW/Australia
+AUSTRALIA_SYDNEY_TZ = 'Australia/Sydney'
+
+def convert_to_australia_sydney(timestamp_series: pd.Series) -> pd.Series:
+    """
+    Convert timezone-aware timestamps to Australia/Sydney local time.
+    
+    Args:
+        timestamp_series: Series of datetime objects (may be timezone-aware or naive)
+    
+    Returns:
+        Series of datetime objects in Australia/Sydney timezone (timezone-naive)
+    """
+    try:
+        import pytz
+        sydney_tz = pytz.timezone(AUSTRALIA_SYDNEY_TZ)
+        
+        # Check if any timestamps are timezone-aware
+        # Use a sample to check (faster than checking all)
+        sample = timestamp_series.dropna()
+        if len(sample) == 0:
+            return timestamp_series
+        
+        # Check if first non-null value is timezone-aware
+        first_valid = sample.iloc[0]
+        is_tz_aware = first_valid.tz is not None if hasattr(first_valid, 'tz') else False
+        
+        if is_tz_aware:
+            # Convert from UTC (or whatever timezone) to Sydney
+            converted = timestamp_series.dt.tz_convert(sydney_tz)
+            # Remove timezone info for easier calculations
+            return converted.dt.tz_localize(None)
+        else:
+            # If naive, assume UTC and localize then convert
+            # This handles cases where data is UTC but not marked as such
+            utc_tz = pytz.UTC
+            # Localize naive timestamps to UTC
+            localized = timestamp_series.apply(
+                lambda x: utc_tz.localize(x) if pd.notna(x) and x.tz is None else x
+            )
+            # Convert to Sydney timezone
+            converted = localized.dt.tz_convert(sydney_tz)
+            # Remove timezone info
+            return converted.dt.tz_localize(None)
+    except Exception as e:
+        # Fallback: return as-is if conversion fails
+        # Log the error for debugging but don't crash
+        import warnings
+        warnings.warn(f"Timezone conversion failed: {e}. Using original timestamps.")
+        return timestamp_series
+
 
 class AppleMusicParser:
     """Parser for Apple Music exported data."""
@@ -299,6 +350,8 @@ class AppleMusicParser:
             # Filter by year if specified
             if year and 'Event Start Timestamp' in df.columns:
                 df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+                # Convert to Australia/Sydney timezone
+                df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
                 df = df[df['Event Start Timestamp'].dt.year == year]
             
             # Count plays (PLAY_END events are completed plays)
@@ -320,7 +373,9 @@ class AppleMusicParser:
             
             # Get date range
             if 'Event Start Timestamp' in df.columns:
-                dates = pd.to_datetime(df['Event Start Timestamp'], errors='coerce').dropna()
+                dates = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+                # Convert to Australia/Sydney timezone
+                dates = convert_to_australia_sydney(dates).dropna()
                 if len(dates) > 0:
                     stats['date_range']['start'] = dates.min().strftime('%Y-%m-%d')
                     stats['date_range']['end'] = dates.max().strftime('%Y-%m-%d')
@@ -346,6 +401,8 @@ class AppleMusicParser:
         # Filter by year if specified
         if year and 'Event Start Timestamp' in df.columns:
             df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+            # Convert to Australia/Sydney timezone
+            df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
             df = df[df['Event Start Timestamp'].dt.year == year]
         
         # Filter for actual plays (not just starts)
@@ -420,6 +477,8 @@ class AppleMusicParser:
             # Filter by year if specified
             if year and 'Event Start Timestamp' in df.columns:
                 df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+                # Convert to Australia/Sydney timezone
+                df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
                 df = df[df['Event Start Timestamp'].dt.year == year]
             
             # Filter for actual plays
@@ -583,6 +642,8 @@ class AppleMusicParser:
             return pd.DataFrame()
         
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        # Convert to Australia/Sydney timezone for accurate local time representation
+        df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
         df = df.dropna(subset=['Event Start Timestamp'])
         
         if year:
@@ -628,6 +689,8 @@ class AppleMusicParser:
             return pd.DataFrame()
         
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        # Convert to Australia/Sydney timezone for accurate local time representation
+        df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
         df = df.dropna(subset=['Event Start Timestamp'])
         
         if year:
@@ -672,6 +735,8 @@ class AppleMusicParser:
             return pd.DataFrame()
         
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        # Convert to Australia/Sydney timezone for accurate local time representation
+        df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
         df = df.dropna(subset=['Event Start Timestamp'])
         
         if year:
@@ -719,6 +784,8 @@ class AppleMusicParser:
             return {'longest_streak': 0, 'last_streak': 0, 'total_listening_days': 0}
         
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        # Convert to Australia/Sydney timezone for accurate local time representation
+        df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
         df = df.dropna(subset=['Event Start Timestamp'])
         
         if year:

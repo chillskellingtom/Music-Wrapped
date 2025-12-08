@@ -65,10 +65,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import the Apple Music parser from this project
-from apple_music_parser import AppleMusicParser
+from apple_music_parser import AppleMusicParser, convert_to_australia_sydney
 
 # Import Supabase authentication (industry-standard, SOC2 certified)
 from auth_supabase import SupabaseAuth
+
+# Import activity tracker
+try:
+    from activity_tracker import ActivityTracker
+    ACTIVITY_TRACKING_AVAILABLE = True
+except ImportError:
+    ACTIVITY_TRACKING_AVAILABLE = False
 
 # Try to import Supabase for storage
 try:
@@ -411,6 +418,12 @@ def get_play_activity_df(_parser: AppleMusicParser, year: int = None) -> pd.Data
     if 'Event Start Timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
         df = df.dropna(subset=['timestamp'])
+        
+        # Convert UTC to Australia/Sydney timezone for consistent local time representation
+        # This fixes the "Tuesday 4-6 PM gap" issue and ensures all times reflect
+        # when the person was actually listening based on their location (NSW/Australia)
+        df['timestamp'] = convert_to_australia_sydney(df['timestamp'])
+        
         df['date'] = df['timestamp'].dt.date
         df['year'] = df['timestamp'].dt.year
         df['month'] = df['timestamp'].dt.to_period('M').astype(str)
@@ -460,6 +473,8 @@ def get_full_library_table(_parser: AppleMusicParser, year: int = None) -> pd.Da
     # Filter by year if specified
     if year and 'Event Start Timestamp' in df.columns:
         df['Event Start Timestamp'] = pd.to_datetime(df['Event Start Timestamp'], errors='coerce')
+        # Convert to Australia/Sydney timezone for consistent local time
+        df['Event Start Timestamp'] = convert_to_australia_sydney(df['Event Start Timestamp'])
         df = df[df['Event Start Timestamp'].dt.year == year]
     
     # Filter for actual plays
@@ -1283,9 +1298,22 @@ def main():
     # ========================================================================
     # AUTHENTICATION (Supabase - SOC2 certified, forgot password, 2FA)
     # ========================================================================
-    auth = SupabaseAuth()
-    if not auth.require_auth():
-        st.stop()
+    # Check if authentication is disabled (for family sharing)
+    auth_required = st.secrets.get("auth", {}).get("required", True)
+    auth = None
+    
+    if auth_required:
+        auth = SupabaseAuth()
+        if not auth.require_auth():
+            st.stop()
+    else:
+        # Authentication disabled - show warning in sidebar
+        st.sidebar.warning("⚠️ Authentication disabled - app is publicly accessible")
+    
+    # Initialize activity tracker (if available)
+    activity_tracker = None
+    if ACTIVITY_TRACKING_AVAILABLE:
+        activity_tracker = ActivityTracker()
     
     # Parse command line args for data directory
     parser_args = argparse.ArgumentParser()
@@ -1302,7 +1330,47 @@ def main():
     # SIDEBAR
     # ========================================================================
     st.sidebar.title("🎵 Apple Music Dashboard")
-    auth.logout_button()  # Add logout button
+    if auth:
+        auth.logout_button()  # Add logout button only if auth is enabled
+        
+        # Show current session duration
+        if activity_tracker:
+            session_duration = activity_tracker.get_session_duration()
+            if session_duration is not None:
+                duration_str = activity_tracker._format_duration(session_duration)
+                st.sidebar.caption(f"⏱️ Session: {duration_str}")
+    
+    # Activity tracking section (admin view)
+    if activity_tracker and auth:
+        st.sidebar.markdown("---")
+        with st.sidebar.expander("📊 Activity Log", expanded=False):
+            recent_activity = activity_tracker.get_recent_activity(limit=10)
+            
+            if recent_activity:
+                st.markdown("**Recent Activity:**")
+                for activity in recent_activity[:5]:  # Show last 5
+                    event_type = activity.get("event_type", "unknown")
+                    email = activity.get("email", "unknown")
+                    event_time = activity.get("event_time", "")
+                    duration = activity.get("session_duration_seconds")
+                    
+                    # Format time
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(event_time.replace('Z', '+00:00'))
+                        time_str = dt.strftime("%m/%d %H:%M")
+                    except:
+                        time_str = event_time[:16] if len(event_time) > 16 else event_time
+                    
+                    # Format event
+                    icon = "🔐" if event_type == "login" else "🚪" if event_type == "logout" else "👁️"
+                    duration_str = f" ({activity_tracker._format_duration(duration)})" if duration else ""
+                    
+                    st.caption(f"{icon} {email[:20]}... - {time_str}{duration_str}")
+            else:
+                st.caption("No activity logged yet")
+                st.caption("(Logs to console if Supabase table not available)")
+    
     st.sidebar.markdown("---")
     
     # Data directory input
@@ -1332,11 +1400,11 @@ def main():
         data_dir = supabase_data_dir
         st.sidebar.info("📦 Using data from Supabase Storage")
     else:
-        data_dir = st.sidebar.text_input(
-            "Apple Music Activity folder",
+    data_dir = st.sidebar.text_input(
+        "Apple Music Activity folder",
             value=default_path,
-            placeholder="/path/to/Apple Music Activity"
-        )
+        placeholder="/path/to/Apple Music Activity"
+    )
     
     if not data_dir:
         st.title("🎵 Apple Music Wrapped Dashboard")
@@ -1735,7 +1803,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+    main()
     except Exception as e:
         st.error(f"❌ An error occurred: {e}")
         st.exception(e)
